@@ -18,7 +18,7 @@ function Slider({
 
   return (
     <SliderPrimitive.Root
-      className={cn("data-horizontal:w-full data-vertical:h-full", className)}
+      className={cn("data-horizontal:w-full data-vertical:h-full pointer-events-auto", className)}
       data-slot="slider"
       value={value}
       min={min}
@@ -26,10 +26,10 @@ function Slider({
       thumbAlignment="edge"
       {...props}
     >
-      <SliderPrimitive.Control className="relative flex w-full touch-none items-center select-none data-disabled:opacity-50 data-vertical:h-full data-vertical:min-h-40 data-vertical:w-auto data-vertical:flex-col">
+      <SliderPrimitive.Control className="relative flex w-full touch-none items-center select-none data-disabled:opacity-50 data-vertical:h-full data-vertical:min-h-40 data-vertical:w-auto data-vertical:flex-col cursor-pointer">
         <SliderPrimitive.Track
           data-slot="slider-track"
-          className="relative grow overflow-hidden rounded-full bg-muted select-none data-horizontal:h-1.5 data-horizontal:w-full data-vertical:h-full data-vertical:w-1.5 cursor-pointer"
+          className="relative grow overflow-hidden rounded-full bg-white/10 select-none data-horizontal:h-2 data-horizontal:w-full data-vertical:h-full data-vertical:w-2"
         >
           <SliderPrimitive.Indicator
             data-slot="slider-range"
@@ -40,7 +40,7 @@ function Slider({
           <SliderPrimitive.Thumb
             data-slot="slider-thumb"
             key={index}
-            className="relative block size-6 shrink-0 rounded-full border-2 border-primary bg-white shadow-xl ring-primary/20 transition-all select-none hover:scale-110 hover:ring-4 focus-visible:ring-4 focus-visible:outline-hidden active:scale-95 active:ring-4 disabled:pointer-events-none disabled:opacity-50 cursor-grab active:cursor-grabbing after:absolute after:-inset-4 after:content-['']"
+            className="relative block size-6 shrink-0 rounded-full border-2 border-primary bg-white shadow-xl ring-primary/20 transition-all select-none hover:scale-110 hover:ring-4 focus-visible:ring-4 focus-visible:outline-hidden active:scale-95 active:ring-4 disabled:pointer-events-none disabled:opacity-50 cursor-grab active:cursor-grabbing after:absolute after:-inset-6 after:content-[''] z-30"
           />
         ))}
       </SliderPrimitive.Control>
