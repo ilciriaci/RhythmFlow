@@ -566,16 +566,16 @@ export default function App() {
                   </div>
                 </div>
               <Separator orientation="vertical" className="h-12 bg-white/10" />
-              <div className="w-full sm:w-56 space-y-3 relative z-20">
+              <div className="w-full sm:w-56 space-y-3 relative z-50 pointer-events-auto">
                 <Slider 
                   value={[bpm || 120]} 
                   onValueChange={(v) => {
-                    if (Array.isArray(v) && v.length > 0) {
-                      const newBpm = v[0];
+                    const newBpm = Array.isArray(v) ? v[0] : v;
+                    if (typeof newBpm === 'number' && !isNaN(newBpm)) {
                       setBpm(newBpm);
                       setTempBpm(newBpm.toString());
                       if (isPlaying) {
-                        Tone.Transport.bpm.rampTo(newBpm, 0.1);
+                        Tone.Transport.bpm.value = newBpm;
                         currentBpmRef.current = newBpm;
                       }
                     }
