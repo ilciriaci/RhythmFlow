@@ -293,10 +293,11 @@ export default function App() {
         
         // Use ticks for absolute precision regardless of BPM changes
         const subdivisionTicks = Tone.Time(step.subdivision).toTicks();
-        const beatTicks = den === 8 ? Tone.Time('8n').toTicks() : Tone.Time('4n').toTicks();
+        const beatTicks = Tone.Time(`${den}n`).toTicks();
         const measureTicks = beatsPerMeasure * beatTicks;
         
-        const subdivisionsPerMeasure = Math.round(measureTicks / subdivisionTicks);
+        // Resolution is the finest of either beat or subdivision
+        const resolutionTicks = Math.min(subdivisionTicks, beatTicks);
         
         let stepMeasures = step.measures;
         if (sequence.length === 1 && step.durationType === 'time') {
@@ -304,53 +305,63 @@ export default function App() {
           const secondsPerMeasure = (beatsPerMeasure * (den === 8 ? 0.5 : 1)) * (60 / currentBpmRef.current);
           stepMeasures = Math.ceil(totalSeconds / secondsPerMeasure);
         } else if (sequence.length === 1 && step.durationType === 'loop') {
-          stepMeasures = 1; // Just one measure, let the Part loop it
+          stepMeasures = 1; 
         }
 
-        const totalSubdivisions = stepMeasures * subdivisionsPerMeasure;
+        const totalTicksInStep = stepMeasures * measureTicks;
+        const numEvents = Math.round(totalTicksInStep / resolutionTicks);
 
-        for (let i = 0; i < totalSubdivisions; i++) {
-          const eventTick = accumulatedTicks + (i * subdivisionTicks);
-          const isMainBeat = (i * subdivisionTicks) % beatTicks === 0;
-          const beatNumber = Math.floor((i * subdivisionTicks) / beatTicks) % beatsPerMeasure + 1;
-          const isAccent = isMainBeat && beatNumber === 1;
-          const measureInStep = Math.floor(i / subdivisionsPerMeasure) + 1;
+        for (let i = 0; i < numEvents; i++) {
+          const currentTickInStep = i * resolutionTicks;
+          const isMainBeat = currentTickInStep % beatTicks === 0;
+          const isSubdivisionBeat = currentTickInStep % subdivisionTicks === 0;
+          
+          if (isMainBeat || isSubdivisionBeat) {
+            const beatNumber = Math.floor(currentTickInStep / beatTicks) % beatsPerMeasure + 1;
+            const isAccent = isMainBeat && beatNumber === 1;
+            const measureInStep = Math.floor(currentTickInStep / measureTicks) + 1;
 
-          events.push({
-            time: eventTick + "i", // "i" suffix for ticks
-            isAccent,
-            isMainBeat,
-            stepIdx: idx,
-            measure: measureInStep,
-            beat: beatNumber,
-            subdivision: step.subdivision
-          });
+            events.push({
+              time: (accumulatedTicks + currentTickInStep) + "i",
+              isAccent,
+              isMainBeat,
+              isSoundBeat: isMainBeat || isSubdivisionBeat,
+              stepIdx: idx,
+              measure: measureInStep,
+              beat: beatNumber,
+              subdivision: step.subdivision
+            });
+          }
         }
-        accumulatedTicks += stepMeasures * measureTicks;
+        accumulatedTicks += totalTicksInStep;
       });
 
       partRef.current = new Tone.Part((time, event) => {
-        if (event.isMainBeat || subdivisionIsFaster(sequence[event.stepIdx].subdivision)) {
+        // Play sound only on subdivision beats
+        if (event.isSoundBeat) {
           playClick(time, event.isAccent);
         }
 
-        if (event.isMainBeat && event.beat === 1) {
-          measureCount++;
-          if (bpmGrowth.enabled && bpmGrowth.unit === 'measures' && measureCount % (bpmGrowth.every || 4) === 0) {
-            currentBpmRef.current += (bpmGrowth.amount || 0);
-            if (!isNaN(currentBpmRef.current) && isFinite(currentBpmRef.current)) {
-              Tone.Transport.bpm.rampTo(currentBpmRef.current, 0.1);
-              Tone.Draw.schedule(() => setBpm(Math.round(currentBpmRef.current)), time);
+        // Update UI on every main beat
+        if (event.isMainBeat) {
+          if (event.beat === 1) {
+            measureCount++;
+            if (bpmGrowth.enabled && bpmGrowth.unit === 'measures' && measureCount % (bpmGrowth.every || 4) === 0) {
+              currentBpmRef.current += (bpmGrowth.amount || 0);
+              if (!isNaN(currentBpmRef.current) && isFinite(currentBpmRef.current)) {
+                Tone.Transport.bpm.rampTo(currentBpmRef.current, 0.1);
+                Tone.Draw.schedule(() => setBpm(Math.round(currentBpmRef.current)), time);
+              }
             }
           }
-        }
 
-        Tone.Draw.schedule(() => {
-          setCurrentStepIdx(event.stepIdx);
-          setCurrentMeasure(event.measure);
-          setCurrentBeat(event.beat);
-          setVisualBeat(event.beat - 1);
-        }, time);
+          Tone.Draw.schedule(() => {
+            setCurrentStepIdx(event.stepIdx);
+            setCurrentMeasure(event.measure);
+            setCurrentBeat(event.beat);
+            setVisualBeat(event.beat - 1);
+          }, time);
+        }
       }, events);
 
       partRef.current.loop = loopFlow || (sequence.length === 1 && sequence[0].durationType === 'loop');
@@ -380,8 +391,6 @@ export default function App() {
     setCurrentMeasure(0);
     setCurrentBeat(0);
   };
-
-  const subdivisionIsFaster = (s: Subdivision) => s !== '4n';
 
   const clearFlow = () => {
     setIsClearModalOpen(true);
@@ -480,7 +489,25 @@ export default function App() {
   };
 
   const updateStep = (id: string, updates: Partial<SequenceStep>) => {
-    setSequence(sequence.map(s => s.id === id ? { ...s, ...updates } : s));
+    setSequence(sequence.map(s => {
+      if (s.id === id) {
+        const newStep = { ...s, ...updates };
+        // Auto-adjust subdivision if time signature denominator changes
+        if (updates.timeSignature) {
+          const [_, newDen] = updates.timeSignature.split('/').map(Number);
+          const [__, oldDen] = s.timeSignature.split('/').map(Number);
+          if (newDen !== oldDen) {
+            if (newDen === 8 && s.subdivision === '4n') {
+              newStep.subdivision = '8n';
+            } else if (newDen === 4 && s.subdivision === '8n') {
+              newStep.subdivision = '4n';
+            }
+          }
+        }
+        return newStep;
+      }
+      return s;
+    }));
   };
 
   const moveStep = (index: number, direction: 'up' | 'down') => {
@@ -533,12 +560,12 @@ export default function App() {
             <div className="flex items-center gap-6 bg-card/80 p-6 rounded-3xl border border-white/5 backdrop-blur-xl shadow-2xl">
                 <div className="flex flex-col items-end gap-2">
                   <Label className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground font-bold block">Master Tempo</Label>
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 min-w-[180px] justify-end">
                     <Button 
                       variant="outline" 
                       size="sm" 
                       onClick={handleTap}
-                      className="h-7 px-2 text-[9px] font-black bg-white/5 border-white/10 hover:bg-primary/20 hover:text-primary hover:border-primary/30 transition-all rounded-md"
+                      className="h-10 px-4 text-[11px] font-black bg-white/5 border-white/10 hover:bg-primary/20 hover:text-primary hover:border-primary/30 transition-all rounded-xl shadow-lg active:scale-95"
                     >
                       TAP
                     </Button>
@@ -649,27 +676,32 @@ export default function App() {
                     ))}
 
                     {/* Main Beat Indicators */}
-                    {Array.from({ length: sequence[currentStepIdx]?.timeSignature.split('/')[0] ? parseInt(sequence[currentStepIdx].timeSignature.split('/')[0]) : 4 }).map((_, i, arr) => (
-                      <motion.div
-                        key={i}
-                        className={cn(
-                          "absolute w-4 h-4 rounded-full transition-all duration-300",
-                          currentBeat === i + 1 
-                            ? "bg-primary shadow-[0_0_25px_rgba(var(--primary),0.8)] scale-125" 
-                            : "bg-white/5 border border-white/10"
-                        )}
-                        style={{
-                          transform: `rotate(${i * (360 / arr.length)}deg) translateY(-140px)`
-                        }}
-                      >
-                        {currentBeat === i + 1 && (
-                          <motion.div 
-                            layoutId="glow"
-                            className="absolute inset-[-8px] bg-primary/20 blur-md rounded-full"
-                          />
-                        )}
-                      </motion.div>
-                    ))}
+                    {Array.from({ length: sequence[currentStepIdx]?.timeSignature.split('/')[0] ? parseInt(sequence[currentStepIdx].timeSignature.split('/')[0]) : 4 }).map((_, i, arr) => {
+                      const numBeats = arr.length;
+                      // Calculate angle based on number of beats
+                      const angle = i * (360 / numBeats);
+                      return (
+                        <motion.div
+                          key={i}
+                          className={cn(
+                            "absolute w-4 h-4 rounded-full transition-all duration-300",
+                            currentBeat === i + 1 
+                              ? "bg-primary shadow-[0_0_25px_rgba(var(--primary),0.8)] scale-125" 
+                              : "bg-white/5 border border-white/10"
+                          )}
+                          style={{
+                            transform: `rotate(${angle}deg) translateY(-140px)`
+                          }}
+                        >
+                          {currentBeat === i + 1 && (
+                            <motion.div 
+                              layoutId="glow"
+                              className="absolute inset-[-8px] bg-primary/20 blur-md rounded-full"
+                            />
+                          )}
+                        </motion.div>
+                      );
+                    })}
                   </div>
 
                   {/* Center Display - Hardware Style */}
