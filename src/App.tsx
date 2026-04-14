@@ -1228,14 +1228,18 @@ export default function App() {
                                 {flowDurationType === 'time' ? 'Duration (Minutes)' : 'Duration (Measures)'}
                               </Label>
                               <div className="flex items-center gap-4 pointer-events-auto">
-                                <Slider 
-                                  value={[flowDurationValue ?? 1]} 
-                                  onValueChange={(v) => setFlowDurationValue(v[0])}
-                                  min={1}
-                                  max={flowDurationType === 'time' ? 60 : 500}
-                                  step={1}
-                                  className="flex-1"
-                                />
+                                 <input
+                                   type="range"
+                                   value={flowDurationValue ?? 1}
+                                   onChange={(e) => setFlowDurationValue(parseInt(e.target.value))}
+                                   min={1}
+                                   max={flowDurationType === 'time' ? 60 : 500}
+                                   step={1}
+                                   style={{
+                                     background: `linear-gradient(to right, oklch(0.75 0.15 65) ${((flowDurationValue - 1) / ((flowDurationType === 'time' ? 60 : 500) - 1)) * 100}%, rgba(255,255,255,0.1) 0%)`
+                                   }}
+                                   className="flex-1 h-2 appearance-none rounded-full cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-7 [&::-webkit-slider-thumb]:h-7 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-primary [&::-webkit-slider-thumb]:shadow-[0_0_20px_rgba(255,255,255,0.4)] [&::-webkit-slider-thumb]:cursor-grab [&::-webkit-slider-thumb]:active:cursor-grabbing [&::-moz-range-thumb]:w-7 [&::-moz-range-thumb]:h-7 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-white [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-primary [&::-moz-range-thumb]:cursor-grab"
+                                 />
                                 <div className="flex items-center gap-2 bg-white/5 px-3 py-2 rounded-xl border border-white/10 min-w-[100px] justify-center">
                                   <Input
                                     type="number"
