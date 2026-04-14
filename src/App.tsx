@@ -25,7 +25,8 @@ import {
   History,
   Edit3,
   Check,
-  X
+  X,
+  HelpCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Button } from '@/components/ui/button';
@@ -128,12 +129,15 @@ export default function App() {
   const [currentMeasure, setCurrentMeasure] = useState(0);
   const [currentBeat, setCurrentBeat] = useState(0);
   const [visualBeat, setVisualBeat] = useState(0);
+  const [tapTimes, setTapTimes] = useState<number[]>([]);
 
   const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
   const [isClearModalOpen, setIsClearModalOpen] = useState(false);
+  const [isManualOpen, setIsManualOpen] = useState(false);
   const [routineNameInput, setRoutineNameInput] = useState('');
   const [isSavingAsNew, setIsSavingAsNew] = useState(false);
   const [routineToRenameId, setRoutineToRenameId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState('flow');
 
   // Persist routines to localStorage
   useEffect(() => {
@@ -143,6 +147,12 @@ export default function App() {
   const synthRef = useRef<Tone.Synth | null>(null);
   const partRef = useRef<Tone.Part | null>(null);
   const bpmIntervalRef = useRef<number | null>(null);
+  const currentBpmRef = useRef<number>(bpm);
+
+  // Sync ref with state
+  useEffect(() => {
+    currentBpmRef.current = bpm;
+  }, [bpm]);
 
   // Initialize Synth once
   useEffect(() => {
@@ -207,9 +217,27 @@ export default function App() {
     if (!isNaN(newBpm) && newBpm >= 20 && newBpm <= 400) {
       setBpm(newBpm);
     } else {
-      setTempBpm(bpm.toString());
+      setTempBpm(bpm?.toString() || '120');
     }
     setIsEditingBpm(false);
+  };
+
+  const handleTap = () => {
+    const now = performance.now();
+    const newTapTimes = [...tapTimes, now].slice(-4);
+    setTapTimes(newTapTimes);
+    if (newTapTimes.length >= 2) {
+      const intervals = [];
+      for (let i = 1; i < newTapTimes.length; i++) {
+        intervals.push(newTapTimes[i] - newTapTimes[i-1]);
+      }
+      const avgInterval = intervals.reduce((a, b) => a + b) / intervals.length;
+      const newBpm = Math.round(60000 / avgInterval);
+      if (newBpm >= 40 && newBpm <= 280) {
+        setBpm(newBpm);
+        setTempBpm(newBpm.toString());
+      }
+    }
   };
 
   const playClick = useCallback((time: number, isAccent: boolean) => {
@@ -239,19 +267,21 @@ export default function App() {
       Tone.Transport.stop();
       Tone.Transport.cancel();
       Tone.Transport.bpm.value = bpm;
+      currentBpmRef.current = bpm;
       partRef.current?.dispose();
       if (bpmIntervalRef.current) clearInterval(bpmIntervalRef.current);
 
-      let currentBpm = bpm;
       let measureCount = 0;
 
       // BPM Growth Logic (Time-based)
       if (bpmGrowth.enabled && bpmGrowth.unit === 'time') {
         bpmIntervalRef.current = window.setInterval(() => {
-          currentBpm += bpmGrowth.amount;
-          Tone.Transport.bpm.rampTo(currentBpm, 1);
-          setBpm(Math.round(currentBpm));
-        }, bpmGrowth.every * 60000);
+          currentBpmRef.current += (bpmGrowth.amount || 0);
+          if (!isNaN(currentBpmRef.current) && isFinite(currentBpmRef.current)) {
+            Tone.Transport.bpm.rampTo(currentBpmRef.current, 1);
+            setBpm(Math.round(currentBpmRef.current));
+          }
+        }, (bpmGrowth.every || 1) * 60000);
       }
 
       const events: any[] = [];
@@ -271,7 +301,7 @@ export default function App() {
         let stepMeasures = step.measures;
         if (sequence.length === 1 && step.durationType === 'time') {
           const totalSeconds = step.measures * 60;
-          const secondsPerMeasure = (beatsPerMeasure * (den === 8 ? 0.5 : 1)) * (60 / currentBpm);
+          const secondsPerMeasure = (beatsPerMeasure * (den === 8 ? 0.5 : 1)) * (60 / currentBpmRef.current);
           stepMeasures = Math.ceil(totalSeconds / secondsPerMeasure);
         } else if (sequence.length === 1 && step.durationType === 'loop') {
           stepMeasures = 1; // Just one measure, let the Part loop it
@@ -306,10 +336,12 @@ export default function App() {
 
         if (event.isMainBeat && event.beat === 1) {
           measureCount++;
-          if (bpmGrowth.enabled && bpmGrowth.unit === 'measures' && measureCount % bpmGrowth.every === 0) {
-            currentBpm += bpmGrowth.amount;
-            Tone.Transport.bpm.rampTo(currentBpm, 0.1);
-            Tone.Draw.schedule(() => setBpm(Math.round(currentBpm)), time);
+          if (bpmGrowth.enabled && bpmGrowth.unit === 'measures' && measureCount % (bpmGrowth.every || 4) === 0) {
+            currentBpmRef.current += (bpmGrowth.amount || 0);
+            if (!isNaN(currentBpmRef.current) && isFinite(currentBpmRef.current)) {
+              Tone.Transport.bpm.rampTo(currentBpmRef.current, 0.1);
+              Tone.Draw.schedule(() => setBpm(Math.round(currentBpmRef.current)), time);
+            }
           }
         }
 
@@ -416,6 +448,7 @@ export default function App() {
     setFlowDurationType(routine.flowDurationType || 'loop');
     setFlowDurationValue(routine.flowDurationValue || 1);
     setActiveRoutineId(routine.id);
+    setActiveTab('flow');
   };
 
   const deleteRoutine = (id: string) => {
@@ -478,6 +511,15 @@ export default function App() {
                 <div className="w-1.5 h-1.5 rounded-full bg-primary/20" />
               </div>
               <span className="text-[10px] font-mono uppercase tracking-[0.3em] text-primary/60 font-bold">Precision Engine Active</span>
+              <Button 
+                variant="ghost" 
+                size="icon" 
+                onClick={() => setIsManualOpen(true)}
+                className="w-6 h-6 rounded-full hover:bg-primary/10 text-primary/60 hover:text-primary transition-colors ml-2"
+                title="Manuale d'uso"
+              >
+                <HelpCircle size={14} />
+              </Button>
             </div>
             <h1 className="text-6xl font-black tracking-tight font-heading text-white">
               RHYTHM<span className="text-primary">FLOW</span>
@@ -489,42 +531,59 @@ export default function App() {
 
           <div className="flex flex-col gap-4">
             <div className="flex items-center gap-6 bg-card/80 p-6 rounded-3xl border border-white/5 backdrop-blur-xl shadow-2xl">
-              <div className="text-right space-y-1">
-                <Label className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground font-bold block">Master Tempo</Label>
-                {isEditingBpm ? (
-                  <Input
-                    autoFocus
-                    value={tempBpm ?? ""}
-                    onChange={(e) => setTempBpm(e.target.value)}
-                    onBlur={handleBpmSubmit}
-                    onKeyDown={(e) => e.key === 'Enter' && handleBpmSubmit()}
-                    className="w-24 h-10 bg-background border-primary/20 text-white font-mono text-2xl text-center focus-visible:ring-primary/50"
-                  />
-                ) : (
-                  <div 
-                    className="text-4xl font-mono font-bold text-white leading-none cursor-pointer hover:text-primary transition-all group flex items-baseline justify-end gap-1"
-                    onClick={() => {
-                      setTempBpm(bpm.toString());
-                      setIsEditingBpm(true);
-                    }}
-                  >
-                    <span className="group-hover:scale-110 transition-transform inline-block">{bpm}</span>
-                    <span className="text-xs font-bold text-muted-foreground tracking-widest">BPM</span>
+                <div className="flex flex-col items-end gap-2">
+                  <Label className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground font-bold block">Master Tempo</Label>
+                  <div className="flex items-center gap-3">
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      onClick={handleTap}
+                      className="h-7 px-2 text-[9px] font-black bg-white/5 border-white/10 hover:bg-primary/20 hover:text-primary hover:border-primary/30 transition-all rounded-md"
+                    >
+                      TAP
+                    </Button>
+                    {isEditingBpm ? (
+                      <Input
+                        autoFocus
+                        value={tempBpm ?? ""}
+                        onChange={(e) => setTempBpm(e.target.value)}
+                        onBlur={handleBpmSubmit}
+                        onKeyDown={(e) => e.key === 'Enter' && handleBpmSubmit()}
+                        className="w-24 h-10 bg-background border-primary/20 text-white font-mono text-2xl text-center focus-visible:ring-primary/50"
+                      />
+                    ) : (
+                      <div 
+                        className="text-4xl font-mono font-bold text-white leading-none cursor-pointer hover:text-primary transition-all group flex items-baseline justify-end gap-1"
+                        onClick={() => {
+                          setTempBpm(bpm?.toString() || '120');
+                          setIsEditingBpm(true);
+                        }}
+                      >
+                        <span className="group-hover:scale-110 transition-transform inline-block">{bpm || 120}</span>
+                        <span className="text-xs font-bold text-muted-foreground tracking-widest">BPM</span>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
+                </div>
               <Separator orientation="vertical" className="h-12 bg-white/10" />
-              <div className="w-56 space-y-3">
+              <div className="w-full sm:w-56 space-y-3 relative z-20">
                 <Slider 
-                  value={[bpm]} 
+                  value={[bpm || 120]} 
                   onValueChange={(v) => {
-                    setBpm(v[0]);
-                    setTempBpm(v[0].toString());
+                    if (Array.isArray(v) && v.length > 0) {
+                      const newBpm = v[0];
+                      setBpm(newBpm);
+                      setTempBpm(newBpm.toString());
+                      if (isPlaying) {
+                        Tone.Transport.bpm.rampTo(newBpm, 0.1);
+                        currentBpmRef.current = newBpm;
+                      }
+                    }
                   }} 
                   min={40} 
                   max={280} 
                   step={1}
-                  className="py-2"
+                  className="py-4 cursor-pointer"
                 />
                 <div className="flex justify-between text-[8px] font-mono text-muted-foreground font-bold uppercase tracking-tighter">
                   <span>Largo</span>
@@ -690,7 +749,7 @@ export default function App() {
 
           {/* Right Column: Sequence Editor & Routines */}
           <div className="lg:col-span-7">
-            <Tabs defaultValue="flow" className="h-full flex flex-col">
+            <Tabs value={activeTab} onValueChange={setActiveTab} className="h-full flex flex-col">
               <TabsList className="bg-card/40 border border-white/5 backdrop-blur-xl p-1 rounded-2xl mb-6 grid grid-cols-3 w-full sm:w-fit">
                 <TabsTrigger value="flow" className="rounded-xl px-2 sm:px-6 py-2 data-[state=active]:bg-primary data-[state=active]:text-black font-bold transition-all text-[10px] sm:text-xs">
                   <Activity size={14} className="mr-1 sm:mr-2" /> FLOW
@@ -1305,6 +1364,144 @@ export default function App() {
                       CLEAR ALL
                     </Button>
                   </div>
+                </div>
+              </motion.div>
+            </div>
+          )}
+
+          {/* User Manual Modal */}
+          {isManualOpen && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6">
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setIsManualOpen(false)}
+                className="absolute inset-0 bg-black/90 backdrop-blur-md"
+              />
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                className="relative w-full max-w-2xl bg-card border border-white/10 rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+              >
+                <div className="p-8 border-b border-white/5 flex items-center justify-between bg-white/[0.02]">
+                  <div className="space-y-1">
+                    <h3 className="text-2xl font-black text-white tracking-tight flex items-center gap-3">
+                      <HelpCircle className="text-primary" size={24} />
+                      USER MANUAL
+                    </h3>
+                    <p className="text-sm text-muted-foreground font-medium">
+                      Quick guide to mastering RhythmFlow.
+                    </p>
+                  </div>
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    onClick={() => setIsManualOpen(false)}
+                    className="rounded-full hover:bg-white/5 text-muted-foreground"
+                  >
+                    <X size={20} />
+                  </Button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-8 scroll-smooth">
+                  <div className="space-y-10 pb-8">
+                    <section className="space-y-4">
+                      <h4 className="text-primary font-bold tracking-widest text-xs uppercase flex items-center gap-2">
+                        <Activity size={14} /> 1. Core Concepts
+                      </h4>
+                      <p className="text-muted-foreground text-sm leading-relaxed">
+                        RhythmFlow is not just a metronome, but a **rhythmic sequencer**. You can create a "Flow" composed of different phases (Steps), each with its own tempo and duration settings.
+                      </p>
+                    </section>
+
+                    <section className="space-y-4">
+                      <h4 className="text-primary font-bold tracking-widest text-xs uppercase flex items-center gap-2">
+                        <Settings2 size={14} /> 2. Setting the Tempo (BPM)
+                      </h4>
+                      <ul className="space-y-3 text-sm text-muted-foreground">
+                        <li className="flex gap-3">
+                          <span className="text-white font-bold">•</span>
+                          <span>Use the **Slider** at the top to quickly adjust the BPM.</span>
+                        </li>
+                        <li className="flex gap-3">
+                          <span className="text-white font-bold">•</span>
+                          <span>Click on the **BPM number** to enter a precise value via keyboard.</span>
+                        </li>
+                      </ul>
+                    </section>
+
+                    <section className="space-y-4">
+                      <h4 className="text-primary font-bold tracking-widest text-xs uppercase flex items-center gap-2">
+                        <Layers size={14} /> 3. Creating the Flow
+                      </h4>
+                      <ul className="space-y-3 text-sm text-muted-foreground">
+                        <li className="flex gap-3">
+                          <span className="text-white font-bold">•</span>
+                          <span>**Add Step:** Click on "PHASE" to add a new part to your workout.</span>
+                        </li>
+                        <li className="flex gap-3">
+                          <span className="text-white font-bold">•</span>
+                          <span>**Configure:** For each step, you can choose the number of measures, time signature (e.g., 4/4, 3/4), and subdivision (e.g., eighths, triplets).</span>
+                        </li>
+                        <li className="flex gap-3">
+                          <span className="text-white font-bold">•</span>
+                          <span>**Reorder:** Use the arrows to move steps or the trash icon to delete them.</span>
+                        </li>
+                      </ul>
+                    </section>
+
+                    <section className="space-y-4">
+                      <h4 className="text-primary font-bold tracking-widest text-xs uppercase flex items-center gap-2">
+                        <TrendingUp size={14} /> 4. BPM Growth (Auto-Increase)
+                      </h4>
+                      <p className="text-muted-foreground text-sm leading-relaxed">
+                        Activate "Growth" to automatically increase speed during the session. You can set how much to increase the BPM and every how many measures (or minutes) to do so. Ideal for practicing technical passages starting slowly.
+                      </p>
+                    </section>
+
+                    <section className="space-y-4">
+                      <h4 className="text-primary font-bold tracking-widest text-xs uppercase flex items-center gap-2">
+                        <Save size={14} /> 5. Saving and Routines
+                      </h4>
+                      <ul className="space-y-3 text-sm text-muted-foreground">
+                        <li className="flex gap-3">
+                          <span className="text-white font-bold">•</span>
+                          <span>**Save:** Click "SAVE" to store your current flow. A window will open to name the routine.</span>
+                        </li>
+                        <li className="flex gap-3">
+                          <span className="text-white font-bold">•</span>
+                          <span>**Recall:** In the "ROUTINES" tab, you'll find all your saved sessions. Click "LOAD" to load one.</span>
+                        </li>
+                        <li className="flex gap-3">
+                          <span className="text-white font-bold">•</span>
+                          <span>**Persistence:** Routines are saved in your browser and will be available even if you close the page.</span>
+                        </li>
+                      </ul>
+                    </section>
+
+                    <section className="space-y-4">
+                      <h4 className="text-primary font-bold tracking-widest text-xs uppercase flex items-center gap-2">
+                        <Music size={14} /> 6. Keyboard Shortcuts
+                      </h4>
+                      <div className="bg-white/5 p-4 rounded-2xl border border-white/10">
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-muted-foreground">Start / Stop</span>
+                          <Badge className="bg-primary text-black font-bold">SPACE</Badge>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+                </div>
+
+                <div className="p-8 border-t border-white/5 bg-white/[0.02]">
+                  <Button 
+                    onClick={() => setIsManualOpen(false)}
+                    className="w-full h-14 rounded-2xl bg-primary text-black font-black hover:bg-primary/90"
+                  >
+                    GOT IT, LET'S START!
+                  </Button>
                 </div>
               </motion.div>
             </div>
