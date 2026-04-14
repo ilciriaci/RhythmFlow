@@ -26,7 +26,8 @@ import {
   Edit3,
   Check,
   X,
-  HelpCircle
+  HelpCircle,
+  Infinity as InfinityIcon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Button } from '@/components/ui/button';
@@ -364,13 +365,22 @@ export default function App() {
         }
       }, events);
 
-      partRef.current.loop = loopFlow || (sequence.length === 1 && sequence[0].durationType === 'loop');
+      partRef.current.loop = flowDurationType === 'loop' || (flowDurationType === 'measures' && loopFlow) || (flowDurationType === 'time' && loopFlow);
       partRef.current.loopEnd = accumulatedTicks + "i";
       partRef.current.start(0);
 
+      // Handle "Measures" duration type
+      if (flowDurationType === 'measures' && !loopFlow) {
+        const totalTicks = flowDurationValue * (Tone.Time('1m').toTicks());
+        Tone.Transport.schedule((t) => {
+          Tone.Draw.schedule(() => stopMetronome(), t);
+        }, totalTicks + "i");
+      }
+
+      // Handle "Time" duration type
       if (flowDurationType === 'time') {
         Tone.Transport.schedule((t) => {
-          stopMetronome();
+          Tone.Draw.schedule(() => stopMetronome(), t);
         }, flowDurationValue * 60);
       }
 
@@ -560,36 +570,38 @@ export default function App() {
             <div className="flex items-center gap-6 bg-card/80 p-6 rounded-3xl border border-white/5 backdrop-blur-xl shadow-2xl">
                 <div className="flex flex-col items-end gap-2">
                   <Label className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground font-bold block">Master Tempo</Label>
-                  <div className="flex items-center gap-3 min-w-[180px] justify-end">
+                  <div className="flex items-center gap-4 min-w-[220px] justify-end">
                     <Button 
                       variant="outline" 
                       size="sm" 
                       onClick={handleTap}
-                      className="h-10 px-4 text-[11px] font-black bg-white/5 border-white/10 hover:bg-primary/20 hover:text-primary hover:border-primary/30 transition-all rounded-xl shadow-lg active:scale-95"
+                      className="h-10 px-4 text-[11px] font-black bg-white/5 border-white/10 hover:bg-primary/20 hover:text-primary hover:border-primary/30 transition-all rounded-xl shadow-lg active:scale-95 shrink-0"
                     >
                       TAP
                     </Button>
-                    {isEditingBpm ? (
-                      <Input
-                        autoFocus
-                        value={tempBpm ?? ""}
-                        onChange={(e) => setTempBpm(e.target.value)}
-                        onBlur={handleBpmSubmit}
-                        onKeyDown={(e) => e.key === 'Enter' && handleBpmSubmit()}
-                        className="w-24 h-10 bg-background border-primary/20 text-white font-mono text-2xl text-center focus-visible:ring-primary/50"
-                      />
-                    ) : (
-                      <div 
-                        className="text-4xl font-mono font-bold text-white leading-none cursor-pointer hover:text-primary transition-all group flex items-baseline justify-end gap-1"
-                        onClick={() => {
-                          setTempBpm(bpm?.toString() || '120');
-                          setIsEditingBpm(true);
-                        }}
-                      >
-                        <span className="group-hover:scale-110 transition-transform inline-block">{bpm || 120}</span>
-                        <span className="text-xs font-bold text-muted-foreground tracking-widest">BPM</span>
-                      </div>
-                    )}
+                    <div className="w-28 flex justify-end">
+                      {isEditingBpm ? (
+                        <Input
+                          autoFocus
+                          value={tempBpm ?? ""}
+                          onChange={(e) => setTempBpm(e.target.value)}
+                          onBlur={handleBpmSubmit}
+                          onKeyDown={(e) => e.key === 'Enter' && handleBpmSubmit()}
+                          className="w-full h-10 bg-background border-primary/20 text-white font-mono text-2xl text-center focus-visible:ring-primary/50"
+                        />
+                      ) : (
+                        <div 
+                          className="text-4xl font-mono font-bold text-white leading-none cursor-pointer hover:text-primary transition-all group flex items-baseline gap-1"
+                          onClick={() => {
+                            setTempBpm(bpm?.toString() || '120');
+                            setIsEditingBpm(true);
+                          }}
+                        >
+                          <span className="group-hover:scale-110 transition-transform inline-block">{bpm || 120}</span>
+                          <span className="text-xs font-bold text-muted-foreground tracking-widest">BPM</span>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               <Separator orientation="vertical" className="h-12 bg-white/10" />
@@ -1191,59 +1203,78 @@ export default function App() {
                         <p className="text-xs text-muted-foreground">Define when the entire flow should stop or loop.</p>
                       </div>
 
-                      <div className="flex items-center gap-4 bg-white/5 p-2 rounded-2xl border border-white/10 w-fit">
-                        {(['measures', 'time', 'loop'] as DurationType[]).map((type) => (
-                          <Button
-                            key={type}
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setFlowDurationType(type)}
-                            className={cn(
-                              "h-10 px-6 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all",
-                              flowDurationType === type ? "bg-primary text-black shadow-lg" : "text-muted-foreground hover:text-white"
-                            )}
-                          >
-                            {type}
-                          </Button>
-                        ))}
-                      </div>
-
-                      {flowDurationType !== 'loop' && (
-                        <div className="space-y-3 animate-in fade-in slide-in-from-top-4">
-                          <Label className="text-[10px] uppercase tracking-widest font-black text-muted-foreground">
-                            {flowDurationType === 'time' ? 'Duration (Minutes)' : 'Duration (Measures)'}
-                          </Label>
-                          <div className="flex items-center gap-4">
-                            <Slider 
-                              value={[flowDurationValue ?? 1]} 
-                              onValueChange={(v) => setFlowDurationValue(v[0])}
-                              min={1}
-                              max={flowDurationType === 'time' ? 20 : 100}
-                              step={1}
-                              className="flex-1"
-                            />
-                            <Input
-                              type="number"
-                              value={flowDurationValue ?? 1}
-                              onChange={(e) => setFlowDurationValue(parseInt(e.target.value) || 1)}
-                              className="w-16 h-12 bg-white/5 rounded-xl border border-white/10 text-center font-mono font-bold text-white focus-visible:ring-primary/30"
-                            />
-                          </div>
+                      <div className="flex flex-col gap-6">
+                        <div className="flex items-center gap-4 bg-white/5 p-2 rounded-2xl border border-white/10 w-fit">
+                          {(['measures', 'time', 'loop'] as DurationType[]).map((type) => (
+                            <Button
+                              key={type}
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setFlowDurationType(type)}
+                              className={cn(
+                                "h-10 px-6 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all",
+                                flowDurationType === type ? "bg-primary text-black shadow-lg" : "text-muted-foreground hover:text-white"
+                              )}
+                            >
+                              {type === 'loop' ? 'Infinite Loop' : type}
+                            </Button>
+                          ))}
                         </div>
-                      )}
 
-                      <div className="flex items-center justify-between p-4 bg-primary/5 rounded-2xl border border-primary/20">
-                        <div className="flex items-center gap-3">
-                          <RotateCcw size={18} className="text-primary" />
-                          <div className="space-y-0.5">
-                            <Label className="text-sm font-bold text-white">LOOP FLOW</Label>
-                            <p className="text-[10px] text-muted-foreground">Restart flow automatically when finished.</p>
+                        {flowDurationType !== 'loop' && (
+                          <div className="space-y-6 animate-in fade-in slide-in-from-top-4">
+                            <div className="space-y-3">
+                              <Label className="text-[10px] uppercase tracking-widest font-black text-muted-foreground">
+                                {flowDurationType === 'time' ? 'Duration (Minutes)' : 'Duration (Measures)'}
+                              </Label>
+                              <div className="flex items-center gap-4 pointer-events-auto">
+                                <Slider 
+                                  value={[flowDurationValue ?? 1]} 
+                                  onValueChange={(v) => setFlowDurationValue(v[0])}
+                                  min={1}
+                                  max={flowDurationType === 'time' ? 60 : 500}
+                                  step={1}
+                                  className="flex-1"
+                                />
+                                <div className="flex items-center gap-2 bg-white/5 px-3 py-2 rounded-xl border border-white/10 min-w-[100px] justify-center">
+                                  <Input
+                                    type="number"
+                                    value={flowDurationValue ?? 1}
+                                    onChange={(e) => setFlowDurationValue(parseInt(e.target.value) || 1)}
+                                    className="w-12 h-8 bg-transparent border-none text-center font-mono font-bold text-white p-0 focus-visible:ring-0"
+                                  />
+                                  <span className="text-[10px] text-primary font-bold uppercase">{flowDurationType === 'time' ? 'Min' : 'Meas'}</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center justify-between p-4 bg-primary/5 rounded-2xl border border-primary/20">
+                              <div className="flex items-center gap-3">
+                                <RotateCcw size={18} className="text-primary" />
+                                <div className="space-y-0.5">
+                                  <Label className="text-sm font-bold text-white">LOOP FLOW</Label>
+                                  <p className="text-[10px] text-muted-foreground">Restart automatically after {flowDurationValue} {flowDurationType}.</p>
+                                </div>
+                              </div>
+                              <Switch 
+                                checked={loopFlow} 
+                                onCheckedChange={setLoopFlow} 
+                              />
+                            </div>
                           </div>
-                        </div>
-                        <Switch 
-                          checked={loopFlow} 
-                          onCheckedChange={setLoopFlow} 
-                        />
+                        )}
+                        
+                        {flowDurationType === 'loop' && (
+                          <div className="p-4 bg-primary/10 rounded-2xl border border-primary/30 flex items-center gap-4 animate-in fade-in zoom-in-95">
+                            <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center">
+                              <InfinityIcon size={20} className="text-primary" />
+                            </div>
+                            <div className="space-y-0.5">
+                              <p className="text-sm font-bold text-white uppercase tracking-tight">Infinite Mode Active</p>
+                              <p className="text-[10px] text-muted-foreground">The sequence will repeat indefinitely until manually stopped.</p>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </CardContent>
