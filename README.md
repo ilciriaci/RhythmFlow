@@ -28,3 +28,5 @@ RhythmFlow is a high-precision metronome application designed for professional m
 - Lucide React (Icons)
 - Motion (Animations)
 - shadcn/ui with @base-ui/react (Components)
+## License
+Apache-2.0
