@@ -411,7 +411,7 @@ export default function App() {
         if (event.isMainBeat && event.beat === 1) {
           measureCountRef.current++;
           const every = bpmGrowth.every || 4;
-          if (bpmGrowth.enabled && bpmGrowth.unit === 'measures' && measureCountRef.current > 0 && (measureCountRef.current - 1) % every === 0) {
+          if (bpmGrowth.enabled && bpmGrowth.unit === 'measures' && measureCountRef.current > every && measureCountRef.current % every === 1) {
             currentBpmRef.current += (bpmGrowth.amount || 0);
             if (!isNaN(currentBpmRef.current) && isFinite(currentBpmRef.current)) {
               Tone.Transport.bpm.rampTo(currentBpmRef.current, 0.1);
