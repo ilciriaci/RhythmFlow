@@ -52,12 +52,68 @@ import { SequenceStep, Subdivision, BpmGrowth, Routine, DurationType } from './t
 
 type RemainderType = 'whole' | 'fixed' | 'sliding';
 
+const EPSILON = 0.001;
 const CONVENTIONAL_FRACTIONS = [0.25, 0.5, 0.75, 0.125, 0.375, 0.625, 0.875];
+const TRIPLET_FRACTIONS = [1/3, 2/3];
+
+function isApproximatelyEqual(a: number, b: number): boolean {
+  return Math.abs(a - b) < EPSILON;
+}
 
 function classifyRemainder(remainder: number): RemainderType {
-  if (remainder === 0) return 'whole';
-  if (CONVENTIONAL_FRACTIONS.includes(remainder)) return 'fixed';
+  if (isApproximatelyEqual(remainder, 0)) return 'whole';
+  
+  for (const frac of CONVENTIONAL_FRACTIONS) {
+    if (isApproximatelyEqual(remainder, frac)) return 'fixed';
+  }
+  
+  for (const frac of TRIPLET_FRACTIONS) {
+    if (isApproximatelyEqual(remainder, frac)) return 'sliding';
+  }
+  
   return 'sliding';
+}
+
+// Compound time signatures: numerator divisible by 3 and > 3 (e.g., 6/8, 9/8, 12/8)
+function isCompoundTimeSignature(timeSignature: string): boolean {
+  const [num] = timeSignature.split('/').map(Number);
+  return num % 3 === 0 && num > 3;
+}
+
+// Get effective number of beats per measure
+function getEffectiveBeats(timeSignature: string): number {
+  const [num, den] = timeSignature.split('/').map(Number);
+  
+  // Compound time: numerator divisible by 3 (e.g., 6/8 = 2 beats, 9/8 = 3 beats)
+  if (isCompoundTimeSignature(timeSignature)) {
+    return num / 3;
+  }
+  
+  // Simple time
+  return num;
+}
+
+// Get the note value that represents one beat
+function getBeatNoteValue(timeSignature: string): string {
+  const [, den] = timeSignature.split('/').map(Number);
+  
+  if (isCompoundTimeSignature(timeSignature)) {
+    // Compound time: dotted note (e.g., 6/8 → dotted quarter = 4n with triplet)
+    // In Tone.js notation, we need the dotted note
+    // For 6/8, 9/8, 12/8: 1 beat = dotted quarter = "4n." or calculated as 4n * 1.5
+    return `${den}n`; // The base note value
+  }
+  
+  return `${den}n`;
+}
+
+// Get tick duration for one beat in compound time
+function getCompoundBeatTicks(den: number): number {
+  // For compound time (6/8, 9/8, 12/8), one beat = dotted note = 3 * (base note) / 2
+  // 6/8: 1 beat = dotted quarter = 3 * eighth notes / 2 = 1.5 * 8n
+  const eighthNoteTicks = Tone.Time('8n').toTicks();
+  // A dotted note = 1.5x the note value
+  return Math.round(eighthNoteTicks * 1.5);
 }
 
 const SUBDIVISIONS: { value: Subdivision; label: string; icon: React.ReactNode }[] = [
@@ -177,7 +233,8 @@ export default function App() {
   const bpmIntervalRef = useRef<number | null>(null);
   const currentBpmRef = useRef<number>(bpm);
   const startingBpmRef = useRef<number>(bpm);
-  const measureCountRef = useRef<number>(0); // Track measures across loop cycles
+  const measureCountRef = useRef<number>(0); // Track measures for BPM growth
+  const globalMeasureRef = useRef<number>(0); // Track global measure for UI display
 
   // Sync ref with state
   useEffect(() => {
@@ -308,6 +365,7 @@ export default function App() {
       partRef.current?.dispose();
       if (bpmIntervalRef.current) clearInterval(bpmIntervalRef.current);
       measureCountRef.current = 0;
+      globalMeasureRef.current = 0;
 
       // BPM Growth Logic (Time-based)
       if (bpmGrowth.enabled && bpmGrowth.unit === 'time') {
@@ -325,11 +383,26 @@ export default function App() {
 
       sequence.forEach((step, idx) => {
         const [num, den] = step.timeSignature.split('/').map(Number);
-        const beatsPerMeasure = num || 4;
+        
+        // For compound time (6/8, 9/8, 12/8), use effective beats
+        // e.g., 6/8 = 2 beats (not 6), 9/8 = 3 beats (not 9)
+        const effectiveBeats = getEffectiveBeats(step.timeSignature);
+        const beatsPerMeasure = effectiveBeats || 4;
         
         // Use ticks for absolute precision regardless of BPM changes
         const subdivisionTicks = Tone.Time(step.subdivision).toTicks();
-        const beatTicks = Tone.Time(`${den}n`).toTicks();
+        
+        // Calculate beat ticks based on time signature type
+        let beatTicks: number;
+        if (isCompoundTimeSignature(step.timeSignature)) {
+          // Compound time: 1 beat = dotted note = 1.5 * (denominator note)
+          // In Tone.js terms: for 6/8, one beat = dotted quarter = 3 eighths * 0.5 = 1.5 * 8n
+          const baseBeatTicks = Tone.Time(`${den}n`).toTicks();
+          beatTicks = Math.round(baseBeatTicks * 1.5);
+        } else {
+          beatTicks = Tone.Time(`${den}n`).toTicks();
+        }
+        
         const measureTicks = beatsPerMeasure * beatTicks;
         
         // Resolution is the finest of either beat or subdivision
@@ -388,13 +461,38 @@ export default function App() {
           playClick(time, event.isAccent);
         }
 
+        // BPM Growth on measure completion and global measure tracking
+        if (event.isMainBeat && event.beat === 1) {
+          measureCountRef.current++;
+          globalMeasureRef.current++;
+          
+          console.log(`[Loop] Global Measure ${globalMeasureRef.current}, Step ${event.stepIdx}, Beat ${event.beat}`);
+          
+          const every = bpmGrowth.every || 4;
+          
+          if (bpmGrowth.enabled && bpmGrowth.unit === 'measures') {
+            const shouldGrow = measureCountRef.current > every && measureCountRef.current % every === 1;
+            
+            if (shouldGrow) {
+              const oldBpm = currentBpmRef.current;
+              currentBpmRef.current += (bpmGrowth.amount || 0);
+              console.log(`[BPM Growth] Measure ${measureCountRef.current}: ${oldBpm} → ${currentBpmRef.current} BPM`);
+              
+              if (!isNaN(currentBpmRef.current) && isFinite(currentBpmRef.current)) {
+                Tone.Transport.bpm.rampTo(currentBpmRef.current, 0.1);
+                Tone.Draw.schedule(() => setBpm(Math.round(currentBpmRef.current)), time);
+              }
+            }
+          }
+        }
+
         // Update UI on every SOUND beat (for ghost marker support)
         Tone.Draw.schedule(() => {
           const isWholeBeat = event.remainderType === 'whole';
           const mainBeat = Math.floor(event.beatFractional);
           
           setCurrentStepIdx(event.stepIdx);
-          setCurrentMeasure(event.measure);
+          setCurrentMeasure(globalMeasureRef.current);
           setCurrentBeat(mainBeat);
           setVisualBeat(mainBeat - 1);
           
@@ -406,19 +504,6 @@ export default function App() {
             setGhostType(null);
           }
         }, time);
-
-        // BPM Growth on measure completion (every N measures means change at measure N+1)
-        if (event.isMainBeat && event.beat === 1) {
-          measureCountRef.current++;
-          const every = bpmGrowth.every || 4;
-          if (bpmGrowth.enabled && bpmGrowth.unit === 'measures' && measureCountRef.current > every && measureCountRef.current % every === 1) {
-            currentBpmRef.current += (bpmGrowth.amount || 0);
-            if (!isNaN(currentBpmRef.current) && isFinite(currentBpmRef.current)) {
-              Tone.Transport.bpm.rampTo(currentBpmRef.current, 0.1);
-              Tone.Draw.schedule(() => setBpm(Math.round(currentBpmRef.current)), time);
-            }
-          }
-        }
       }, events);
 
       partRef.current.loop = flowDurationType === 'loop' || (flowDurationType === 'measures' && loopFlow) || (flowDurationType === 'time' && loopFlow);
