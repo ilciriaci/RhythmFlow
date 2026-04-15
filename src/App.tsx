@@ -50,7 +50,19 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
 import { SequenceStep, Subdivision, BpmGrowth, Routine, DurationType } from './types';
 
+type RemainderType = 'whole' | 'fixed' | 'sliding';
+
+const CONVENTIONAL_FRACTIONS = [0.25, 0.5, 0.75, 0.125, 0.375, 0.625, 0.875];
+
+function classifyRemainder(remainder: number): RemainderType {
+  if (remainder === 0) return 'whole';
+  if (CONVENTIONAL_FRACTIONS.includes(remainder)) return 'fixed';
+  return 'sliding';
+}
+
 const SUBDIVISIONS: { value: Subdivision; label: string; icon: React.ReactNode }[] = [
+  { value: '1n', label: 'Whole', icon: <NoteIcon type="1n" /> },
+  { value: '2n', label: 'Half', icon: <NoteIcon type="2n" /> },
   { value: '4n', label: 'Quarter', icon: <NoteIcon type="4n" /> },
   { value: '8n', label: 'Eighth', icon: <NoteIcon type="8n" /> },
   { value: '16n', label: 'Sixteenth', icon: <NoteIcon type="16n" /> },
@@ -61,6 +73,19 @@ const SUBDIVISIONS: { value: Subdivision; label: string; icon: React.ReactNode }
 function NoteIcon({ type, className }: { type: Subdivision; className?: string }) {
   const color = "currentColor";
   switch (type) {
+    case '1n':
+      return (
+        <svg width="16" height="20" viewBox="0 0 16 20" fill="none" className={className}>
+          <ellipse cx="6" cy="15" rx="5" ry="4" fill={color} />
+        </svg>
+      );
+    case '2n':
+      return (
+        <svg width="14" height="20" viewBox="0 0 14 20" fill="none" className={className}>
+          <ellipse cx="5" cy="15" rx="4" ry="3" fill={color} />
+          <path d="M9 2V16" stroke={color} strokeWidth="2" strokeLinecap="round" />
+        </svg>
+      );
     case '4n':
       return (
         <svg width="12" height="20" viewBox="0 0 12 20" fill="none" className={className}>
@@ -130,6 +155,8 @@ export default function App() {
   const [currentMeasure, setCurrentMeasure] = useState(0);
   const [currentBeat, setCurrentBeat] = useState(0);
   const [visualBeat, setVisualBeat] = useState(0);
+  const [ghostBeat, setGhostBeat] = useState<number | null>(null);
+  const [ghostType, setGhostType] = useState<RemainderType | null>(null);
   const [tapTimes, setTapTimes] = useState<number[]>([]);
 
   const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
@@ -149,6 +176,7 @@ export default function App() {
   const partRef = useRef<Tone.Part | null>(null);
   const bpmIntervalRef = useRef<number | null>(null);
   const currentBpmRef = useRef<number>(bpm);
+  const startingBpmRef = useRef<number>(bpm); // For BPM growth reset
 
   // Sync ref with state
   useEffect(() => {
@@ -215,8 +243,12 @@ export default function App() {
 
   const handleBpmSubmit = () => {
     const newBpm = parseInt(tempBpm);
-    if (!isNaN(newBpm) && newBpm >= 20 && newBpm <= 400) {
+    if (!isNaN(newBpm) && newBpm >= 20 && newBpm <= 320) {
       setBpm(newBpm);
+      currentBpmRef.current = newBpm;
+      if (isPlaying) {
+        Tone.Transport.bpm.value = newBpm;
+      }
     } else {
       setTempBpm(bpm?.toString() || '120');
     }
@@ -234,7 +266,7 @@ export default function App() {
       }
       const avgInterval = intervals.reduce((a, b) => a + b) / intervals.length;
       const newBpm = Math.round(60000 / avgInterval);
-      if (newBpm >= 40 && newBpm <= 280) {
+      if (newBpm >= 20 && newBpm <= 320) {
         setBpm(newBpm);
         setTempBpm(newBpm.toString());
       }
@@ -269,6 +301,10 @@ export default function App() {
       Tone.Transport.cancel();
       Tone.Transport.bpm.value = bpm;
       currentBpmRef.current = bpm;
+      // Track starting BPM for growth reset
+      if (bpmGrowth.enabled) {
+        startingBpmRef.current = bpm;
+      }
       partRef.current?.dispose();
       if (bpmIntervalRef.current) clearInterval(bpmIntervalRef.current);
 
@@ -316,20 +352,30 @@ export default function App() {
           const currentTickInStep = i * resolutionTicks;
           const isMainBeat = currentTickInStep % beatTicks === 0;
           const isSubdivisionBeat = currentTickInStep % subdivisionTicks === 0;
-          
-          if (isMainBeat || isSubdivisionBeat) {
-            const beatNumber = Math.floor(currentTickInStep / beatTicks) % beatsPerMeasure + 1;
+          const isSubdivisionLong = subdivisionTicks >= beatTicks; // 1n, 2n
+
+          if (isSubdivisionLong ? isSubdivisionBeat : (isMainBeat || isSubdivisionBeat)) {
+            // Use absolute tick for correct visual positioning
+            const absoluteTick = accumulatedTicks + currentTickInStep;
+            const tickInMeasure = absoluteTick % measureTicks;
+            const beatNumber = Math.floor(tickInMeasure / beatTicks) + 1;
             const isAccent = isMainBeat && beatNumber === 1;
-            const measureInStep = Math.floor(currentTickInStep / measureTicks) + 1;
+            const measureInStep = Math.floor(tickInMeasure / measureTicks) + 1;
+            const beatFractional = tickInMeasure / beatTicks + 1;
+            const remainder = (tickInMeasure % beatTicks) / beatTicks;
+            const remainderType = classifyRemainder(remainder);
 
             events.push({
-              time: (accumulatedTicks + currentTickInStep) + "i",
+              time: absoluteTick + "i",
               isAccent,
               isMainBeat,
               isSoundBeat: isMainBeat || isSubdivisionBeat,
               stepIdx: idx,
               measure: measureInStep,
               beat: beatNumber,
+              beatFractional,
+              remainder,
+              remainderType,
               subdivision: step.subdivision
             });
           }
@@ -343,25 +389,35 @@ export default function App() {
           playClick(time, event.isAccent);
         }
 
-        // Update UI on every main beat
-        if (event.isMainBeat) {
-          if (event.beat === 1) {
-            measureCount++;
-            if (bpmGrowth.enabled && bpmGrowth.unit === 'measures' && measureCount % (bpmGrowth.every || 4) === 0) {
-              currentBpmRef.current += (bpmGrowth.amount || 0);
-              if (!isNaN(currentBpmRef.current) && isFinite(currentBpmRef.current)) {
-                Tone.Transport.bpm.rampTo(currentBpmRef.current, 0.1);
-                Tone.Draw.schedule(() => setBpm(Math.round(currentBpmRef.current)), time);
-              }
+        // Update UI on every SOUND beat (for ghost marker support)
+        Tone.Draw.schedule(() => {
+          const isWholeBeat = event.remainderType === 'whole';
+          const mainBeat = Math.floor(event.beatFractional);
+          
+          setCurrentStepIdx(event.stepIdx);
+          setCurrentMeasure(event.measure);
+          setCurrentBeat(mainBeat);
+          setVisualBeat(mainBeat - 1);
+          
+          if (!isWholeBeat) {
+            setGhostBeat(event.beatFractional);
+            setGhostType(event.remainderType);
+          } else {
+            setGhostBeat(null);
+            setGhostType(null);
+          }
+        }, time);
+
+        // BPM Growth on measure completion (still only on main beats)
+        if (event.isMainBeat && event.beat === 1) {
+          measureCount++;
+          if (bpmGrowth.enabled && bpmGrowth.unit === 'measures' && measureCount % (bpmGrowth.every || 4) === 0) {
+            currentBpmRef.current += (bpmGrowth.amount || 0);
+            if (!isNaN(currentBpmRef.current) && isFinite(currentBpmRef.current)) {
+              Tone.Transport.bpm.rampTo(currentBpmRef.current, 0.1);
+              Tone.Draw.schedule(() => setBpm(Math.round(currentBpmRef.current)), time);
             }
           }
-
-          Tone.Draw.schedule(() => {
-            setCurrentStepIdx(event.stepIdx);
-            setCurrentMeasure(event.measure);
-            setCurrentBeat(event.beat);
-            setVisualBeat(event.beat - 1);
-          }, time);
         }
       }, events);
 
@@ -396,10 +452,22 @@ export default function App() {
     Tone.Transport.cancel();
     partRef.current?.dispose();
     if (bpmIntervalRef.current) clearInterval(bpmIntervalRef.current);
+    
+    // Reset BPM to starting value if growth was enabled
+    if (bpmGrowth.enabled) {
+      const resetBpm = startingBpmRef.current;
+      setBpm(resetBpm);
+      setTempBpm(resetBpm.toString());
+      currentBpmRef.current = resetBpm;
+      Tone.Transport.bpm.value = resetBpm;
+    }
+    
     setIsPlaying(false);
     setCurrentStepIdx(0);
     setCurrentMeasure(0);
     setCurrentBeat(0);
+    setGhostBeat(null);
+    setGhostType(null);
   };
 
   const clearFlow = () => {
@@ -613,21 +681,19 @@ export default function App() {
                     if (typeof newBpm === 'number' && !isNaN(newBpm)) {
                       setBpm(newBpm);
                       setTempBpm(newBpm.toString());
-                      if (isPlaying) {
-                        Tone.Transport.bpm.value = newBpm;
-                        currentBpmRef.current = newBpm;
-                      }
+                      currentBpmRef.current = newBpm;
+                      Tone.Transport.bpm.value = newBpm;
                     }
                   }} 
-                  min={40} 
-                  max={280} 
+                  min={20} 
+                  max={320} 
                   step={1}
                   className="py-4 cursor-pointer"
                 />
                 <div className="flex justify-between text-[8px] font-mono text-muted-foreground font-bold uppercase tracking-tighter">
+                  <span>Grave</span>
                   <span>Largo</span>
                   <span>Andante</span>
-                  <span>Allegro</span>
                   <span>Presto</span>
                 </div>
               </div>
@@ -687,25 +753,48 @@ export default function App() {
                       />
                     ))}
 
+                    {/* Ghost Marker Ring - for between-beat events */}
+                    {ghostBeat !== null && (
+                      <motion.div
+                        key={`ghost-${ghostBeat}-${ghostType}`}
+                        initial={{ opacity: 0, scale: 0.8 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="absolute"
+                        style={{
+                          transform: `rotate(${((ghostBeat - 1) + (ghostBeat % 1)) * (360 / (parseInt(sequence[currentStepIdx]?.timeSignature.split('/')[0]) || 4))}deg) translateY(-150px)`,
+                        }}
+                      >
+                        {ghostType === 'fixed' && (
+                          <div className="w-4 h-4 rounded-full bg-primary/50 shadow-[0_0_12px_rgba(var(--primary),0.4)] border border-primary/30" />
+                        )}
+                        {ghostType === 'sliding' && (
+                          <div className="w-3 h-3 rounded-full bg-primary/30 shadow-[0_0_8px_rgba(var(--primary),0.2)] border border-primary/20" />
+                        )}
+                      </motion.div>
+                    )}
+
                     {/* Main Beat Indicators */}
-                    {Array.from({ length: sequence[currentStepIdx]?.timeSignature.split('/')[0] ? parseInt(sequence[currentStepIdx].timeSignature.split('/')[0]) : 4 }).map((_, i, arr) => {
+                    {Array.from({ length: sequence[currentStepIdx]?.timeSignature.split('/')[0] ? parseInt(sequence[currentStepIdx]?.timeSignature.split('/')[0]) : 4 }).map((_, i, arr) => {
                       const numBeats = arr.length;
                       // Calculate angle based on number of beats
                       const angle = i * (360 / numBeats);
+                      const isActive = currentBeat === i + 1;
+                      
                       return (
                         <motion.div
                           key={i}
                           className={cn(
-                            "absolute w-4 h-4 rounded-full transition-all duration-300",
-                            currentBeat === i + 1 
-                              ? "bg-primary shadow-[0_0_25px_rgba(var(--primary),0.8)] scale-125" 
-                              : "bg-white/5 border border-white/10"
+                            "absolute rounded-full transition-all duration-300",
+                            isActive 
+                              ? "w-4 h-4 bg-primary shadow-[0_0_25px_rgba(var(--primary),0.8)] scale-125" 
+                              : "w-4 h-4 bg-white/5 border border-white/10"
                           )}
                           style={{
-                            transform: `rotate(${angle}deg) translateY(-140px)`
+                            transform: `rotate(${angle}deg) translateY(-140px)`,
                           }}
                         >
-                          {currentBeat === i + 1 && (
+                          {isActive && (
                             <motion.div 
                               layoutId="glow"
                               className="absolute inset-[-8px] bg-primary/20 blur-md rounded-full"
