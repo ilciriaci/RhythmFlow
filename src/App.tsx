@@ -176,7 +176,8 @@ export default function App() {
   const partRef = useRef<Tone.Part | null>(null);
   const bpmIntervalRef = useRef<number | null>(null);
   const currentBpmRef = useRef<number>(bpm);
-  const startingBpmRef = useRef<number>(bpm); // For BPM growth reset
+  const startingBpmRef = useRef<number>(bpm);
+  const measureCountRef = useRef<number>(0); // Track measures across loop cycles
 
   // Sync ref with state
   useEffect(() => {
@@ -301,14 +302,12 @@ export default function App() {
       Tone.Transport.cancel();
       Tone.Transport.bpm.value = bpm;
       currentBpmRef.current = bpm;
-      // Track starting BPM for growth reset
       if (bpmGrowth.enabled) {
         startingBpmRef.current = bpm;
       }
       partRef.current?.dispose();
       if (bpmIntervalRef.current) clearInterval(bpmIntervalRef.current);
-
-      let measureCount = 0;
+      measureCountRef.current = 0;
 
       // BPM Growth Logic (Time-based)
       if (bpmGrowth.enabled && bpmGrowth.unit === 'time') {
@@ -408,10 +407,11 @@ export default function App() {
           }
         }, time);
 
-        // BPM Growth on measure completion (still only on main beats)
+        // BPM Growth on measure completion (every N measures means change at measure N+1)
         if (event.isMainBeat && event.beat === 1) {
-          measureCount++;
-          if (bpmGrowth.enabled && bpmGrowth.unit === 'measures' && measureCount % (bpmGrowth.every || 4) === 0) {
+          measureCountRef.current++;
+          const every = bpmGrowth.every || 4;
+          if (bpmGrowth.enabled && bpmGrowth.unit === 'measures' && measureCountRef.current > 0 && (measureCountRef.current - 1) % every === 0) {
             currentBpmRef.current += (bpmGrowth.amount || 0);
             if (!isNaN(currentBpmRef.current) && isFinite(currentBpmRef.current)) {
               Tone.Transport.bpm.rampTo(currentBpmRef.current, 0.1);
@@ -461,6 +461,7 @@ export default function App() {
       currentBpmRef.current = resetBpm;
       Tone.Transport.bpm.value = resetBpm;
     }
+    measureCountRef.current = 0;
     
     setIsPlaying(false);
     setCurrentStepIdx(0);
