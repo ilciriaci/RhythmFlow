@@ -973,6 +973,7 @@ export default function App() {
                       // Calculate angle based on number of beats
                       const angle = i * (360 / numBeats);
                       const isActive = currentBeat === i + 1;
+                      const isAccent = isActive && i === 0;
                       
                       return (
                         <motion.div
@@ -980,7 +981,9 @@ export default function App() {
                           className={cn(
                             "absolute rounded-full",
                             isActive 
-                              ? "w-4 h-4 bg-primary shadow-[0_0_25px_rgba(var(--primary),0.8)] scale-125" 
+                              ? (isAccent
+                                ? "w-4 h-4 bg-red-500 shadow-[0_0_25px_rgba(239,68,68,0.8)] scale-125"
+                                : "w-4 h-4 bg-primary shadow-[0_0_25px_rgba(var(--primary),0.8)] scale-125")
                               : "w-4 h-4 bg-white/5 border border-white/10"
                           )}
                           style={{
@@ -990,7 +993,10 @@ export default function App() {
                           {isActive && (
                             <motion.div 
                               layoutId="glow"
-                              className="absolute inset-[-8px] bg-primary/20 blur-md rounded-full"
+                              className={cn(
+                                "absolute inset-[-8px] blur-md rounded-full",
+                                isAccent ? "bg-red-500/30" : "bg-primary/20"
+                              )}
                             />
                           )}
                         </motion.div>
@@ -1011,7 +1017,10 @@ export default function App() {
                         {sequence[currentStepIdx]?.label || 'STANDBY'}
                       </motion.div>
                     </AnimatePresence>
-                    <div className="text-9xl font-mono font-black text-white leading-none tracking-tighter drop-shadow-[0_0_20px_rgba(255,255,255,0.2)]">
+                    <div className={cn(
+                      "text-9xl font-mono font-black leading-none tracking-tighter drop-shadow-[0_0_20px_rgba(255,255,255,0.2)] transition-colors duration-100",
+                      isPlaying && currentBeat === 1 ? "text-red-500" : "text-white"
+                    )}>
                       {currentBeat || '0'}
                     </div>
                     <div className="mt-4 flex items-center justify-center gap-3">
