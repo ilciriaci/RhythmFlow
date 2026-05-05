@@ -1,65 +1,69 @@
-# AGENTS.md — RhythmFlow
+# AGENTS.md - RhythmFlow
 
 ## Commands
 
-```bash
-npm run dev       # dev server on 0.0.0.0:3000
-npm run build     # Vite production bundle → dist/
-npm run preview   # serve dist/ locally
-npm run clean     # rm -rf dist
-npm run lint      # tsc --noEmit (type-check only — no ESLint exists)
-```
-
-There is **no test script** and no formatter script. `npm run lint` is TypeScript type-checking, not ESLint.
+- `npm run dev` - Start dev server on port 3000 (not default 5173)
+- `npm run lint` - Typecheck only (`tsc --noEmit`), no ESLint configured
+- `npm run build` - Production build to `dist/`
+- No test framework configured
 
 ## Architecture
 
-- Single-package app (not a monorepo). No backend.
-- All application logic lives in **`src/App.tsx`** (~1545 lines) — no sub-components, no custom hook files.
-- Shared types: `src/types.ts`
-- Global styles + Tailwind theme: `src/index.css`
-- shadcn/ui components are vendored into `src/components/ui/`
-- Path alias `@/*` → `src/*` (configured in both `tsconfig.json` and `vite.config.ts`)
+- Single React 19 SPA, not a monorepo
+- Entry: `src/main.tsx` → `src/App.tsx` (main logic, ~88KB)
+- Path alias: `@/` maps to `./src/` (see `tsconfig.json`)
+- UI: shadcn/ui with `@base-ui/react` (not Radix)
+- Components: `src/components/ui/` (shadcn structure)
+- Styling: Tailwind CSS v4 via `@tailwindcss/vite` plugin (no `tailwind.config` file)
 
-## Key Quirks
+## Environment
 
-### Tailwind v4 — no config file
-Tailwind is v4. All theme customization uses `@theme` blocks inside `src/index.css`. **Do not create `tailwind.config.js`.**
+- Target: Google AI Studio deployment
+- `GEMINI_API_KEY` required for AI features (AI Studio injects at runtime)
+- `DISABLE_HMR=true` disables hot reload (set by AI Studio to prevent flickering)
 
-### shadcn uses `@base-ui/react`, not Radix
-The style is `base-nova`, which wraps `@base-ui/react` primitives. When referencing shadcn docs, use the base-ui variant. To add components: `npx shadcn add <component>`.
+## Priority: Time Precision
 
-### Duplicate `lib/utils.ts`
-`lib/utils.ts` at the repo root and `src/lib/utils.ts` are identical. Always import via `@/lib/utils` (resolves to `src/lib/utils.ts`).
+**Time scanning accuracy is the #1 priority.** This is a musical metronome—timing must be sample-accurate. Never compromise tick-based scheduling in `src/App.tsx` for UI convenience. Verify all changes against musical theory (beat = numerator/denominator correctly calculated, especially compound time 6/8, 9/8, 12/8).
 
-### Unused installed packages
-`express` and `@google/genai` are installed but not imported anywhere — AI Studio scaffold leftovers.
+## Key Features & Points of Stability
 
-### `GEMINI_API_KEY` is a build-time define
-Vite injects `process.env.GEMINI_API_KEY` into the client bundle via `define` in `vite.config.ts`. In Google AI Studio it is supplied via the Secrets panel. Locally, put it in `.env` (gitignored).
+### 1. BPM Management
+- **BPM Range:** 20-320 BPM
+- **Reset on Stop:** Always resets to starting BPM (`startingBpmRef.current` saved at start, applied in `stopMetronome()`)
+- **BPM Growth:**
+  - By Measures: Sample-accurate via `measureCountRef` in Transport callback
+  - By Time: Sample-accurate via `Tone.Transport.schedule()` (NOT `setInterval`)
+  - Growth stops and resets on `stopMetronome()`
 
-### HMR disable flag
-Set `DISABLE_HMR=true` to suppress Vite HMR (used by AI Studio to prevent flicker during agent edits).
+### 2. Time Signature Handling
+- **Simple Time (4/4, 3/4, 2/4):** Beats = numerator, beat value = denominator note
+- **Compound Time (6/8, 9/8, 12/8):** 
+  - Beats = numerator ÷ 3 (6/8 = 2 beats, 9/8 = 3 beats)
+  - 1 beat = dotted note = 3 × denominator note
+  - Visual beats = effective beats (not total notes per measure)
+  - `getEffectiveBeats()` in `src/App.tsx:84`
+  - `beatTicks = baseBeatTicks * 3` (not * 1.5)
 
-## State & Persistence
+### 3. Audio-Visual Sync
+- **Sample-Accurate:** Events scheduled with absolute ticks (`absoluteTick + "i"`)
+- **UI Before Audio:** `Tone.Draw.schedule()` updates UI first, then audio plays
+- **No CSS transitions** on beat indicators (`.duration-300` removed) for instant visual response
 
-- All state is in React `useState` inside `App()`.
-- Routines auto-save to `localStorage` key `rhythmflow_routines` on every state change.
-- Audio engine: Tone.js (`Tone.Transport`, `Tone.Part`, `Tone.Synth`). Scheduling uses tick-based absolute positions for BPM-change correctness.
+### 4. Volume Control
+- Range: -20dB to +30dB (slider 0-50, offset -20)
+- Updates synth via `useEffect` on `volume` state
+- UI: Compact slider (`w-16`) in Master Tempo section
 
-## Environment Variables
+### 5. Routine Management
+- Save/Load routines to/from localStorage (`rhythmflow_routines`)
+- Routines store: sequence, BPM, BPM growth settings, loop settings
 
-```dotenv
-GEMINI_API_KEY=   # baked into client bundle at build time
-APP_URL=          # Cloud Run URL (AI Studio injects this)
-DISABLE_HMR=true  # optional: disables Vite HMR
-```
+## Gotchas
 
-`.env*` files (except `.env.example`) are gitignored.
-
-## No CI, No Tests, No Hooks
-
-- No GitHub Actions workflows.
-- No test framework (no Vitest, Jest, Playwright).
-- No pre-commit hooks, no Prettier config, no ESLint config.
-- No `engines` field — use Node 18+.
+- `start.sh` has stale path—do not use
+- `install-node20.sh` is Debian-only, not for macOS
+- Typechecking runs via `npm run lint` (misleading script name)
+- HMR disabled when `DISABLE_HMR=true` (see `vite.config.ts:21`)
+- Compound time: 6/8 = 2 beats (dotted quarter), not 6 beats
+- Index title: "RhythmFlow - Precision Metronome" (not "My Google AI Studio App")

@@ -27,7 +27,8 @@ import {
   Check,
   X,
   HelpCircle,
-  Infinity as InfinityIcon
+  Infinity as InfinityIcon,
+  Volume2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Button } from '@/components/ui/button';
@@ -50,7 +51,75 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
 import { SequenceStep, Subdivision, BpmGrowth, Routine, DurationType } from './types';
 
+type RemainderType = 'whole' | 'fixed' | 'sliding';
+
+const EPSILON = 0.001;
+const CONVENTIONAL_FRACTIONS = [0.25, 0.5, 0.75, 0.125, 0.375, 0.625, 0.875];
+const TRIPLET_FRACTIONS = [1/3, 2/3];
+
+function isApproximatelyEqual(a: number, b: number): boolean {
+  return Math.abs(a - b) < EPSILON;
+}
+
+function classifyRemainder(remainder: number): RemainderType {
+  if (isApproximatelyEqual(remainder, 0)) return 'whole';
+  
+  for (const frac of CONVENTIONAL_FRACTIONS) {
+    if (isApproximatelyEqual(remainder, frac)) return 'fixed';
+  }
+  
+  for (const frac of TRIPLET_FRACTIONS) {
+    if (isApproximatelyEqual(remainder, frac)) return 'sliding';
+  }
+  
+  return 'sliding';
+}
+
+// Compound time signatures: numerator divisible by 3 and > 3 (e.g., 6/8, 9/8, 12/8)
+function isCompoundTimeSignature(timeSignature: string): boolean {
+  const [num] = timeSignature.split('/').map(Number);
+  return num % 3 === 0 && num > 3;
+}
+
+// Get effective number of beats per measure
+function getEffectiveBeats(timeSignature: string): number {
+  const [num, den] = timeSignature.split('/').map(Number);
+  
+  // Compound time: numerator divisible by 3 (e.g., 6/8 = 2 beats, 9/8 = 3 beats)
+  if (isCompoundTimeSignature(timeSignature)) {
+    return num / 3;
+  }
+  
+  // Simple time
+  return num;
+}
+
+// Get the note value that represents one beat
+function getBeatNoteValue(timeSignature: string): string {
+  const [, den] = timeSignature.split('/').map(Number);
+  
+  if (isCompoundTimeSignature(timeSignature)) {
+    // Compound time: dotted note (e.g., 6/8 → dotted quarter = 4n with triplet)
+    // In Tone.js notation, we need the dotted note
+    // For 6/8, 9/8, 12/8: 1 beat = dotted quarter = "4n." or calculated as 4n * 1.5
+    return `${den}n`; // The base note value
+  }
+  
+  return `${den}n`;
+}
+
+// Get tick duration for one beat in compound time
+function getCompoundBeatTicks(den: number): number {
+  // For compound time (6/8, 9/8, 12/8), one beat = dotted note = 3 * (base note) / 2
+  // 6/8: 1 beat = dotted quarter = 3 * eighth notes / 2 = 1.5 * 8n
+  const eighthNoteTicks = Tone.Time('8n').toTicks();
+  // A dotted note = 1.5x the note value
+  return Math.round(eighthNoteTicks * 1.5);
+}
+
 const SUBDIVISIONS: { value: Subdivision; label: string; icon: React.ReactNode }[] = [
+  { value: '1n', label: 'Whole', icon: <NoteIcon type="1n" /> },
+  { value: '2n', label: 'Half', icon: <NoteIcon type="2n" /> },
   { value: '4n', label: 'Quarter', icon: <NoteIcon type="4n" /> },
   { value: '8n', label: 'Eighth', icon: <NoteIcon type="8n" /> },
   { value: '16n', label: 'Sixteenth', icon: <NoteIcon type="16n" /> },
@@ -61,6 +130,19 @@ const SUBDIVISIONS: { value: Subdivision; label: string; icon: React.ReactNode }
 function NoteIcon({ type, className }: { type: Subdivision; className?: string }) {
   const color = "currentColor";
   switch (type) {
+    case '1n':
+      return (
+        <svg width="16" height="20" viewBox="0 0 16 20" fill="none" className={className}>
+          <ellipse cx="6" cy="15" rx="5" ry="4" fill={color} />
+        </svg>
+      );
+    case '2n':
+      return (
+        <svg width="14" height="20" viewBox="0 0 14 20" fill="none" className={className}>
+          <ellipse cx="5" cy="15" rx="4" ry="3" fill={color} />
+          <path d="M9 2V16" stroke={color} strokeWidth="2" strokeLinecap="round" />
+        </svg>
+      );
     case '4n':
       return (
         <svg width="12" height="20" viewBox="0 0 12 20" fill="none" className={className}>
@@ -102,6 +184,7 @@ export default function App() {
   const [bpm, setBpm] = useState(120);
   const [isEditingBpm, setIsEditingBpm] = useState(false);
   const [tempBpm, setTempBpm] = useState('120');
+  const [volume, setVolume] = useState(0); // Volume in dB: -20 to +12
   const [isPlaying, setIsPlaying] = useState(false);
   const [sequence, setSequence] = useState<SequenceStep[]>([
     { id: '1', measures: 2, subdivision: '4n', timeSignature: '4/4', label: 'Intro', durationType: 'measures' },
@@ -130,6 +213,8 @@ export default function App() {
   const [currentMeasure, setCurrentMeasure] = useState(0);
   const [currentBeat, setCurrentBeat] = useState(0);
   const [visualBeat, setVisualBeat] = useState(0);
+  const [ghostBeat, setGhostBeat] = useState<number | null>(null);
+  const [ghostType, setGhostType] = useState<RemainderType | null>(null);
   const [tapTimes, setTapTimes] = useState<number[]>([]);
 
   const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
@@ -147,8 +232,24 @@ export default function App() {
 
   const synthRef = useRef<Tone.Synth | null>(null);
   const partRef = useRef<Tone.Part | null>(null);
-  const bpmIntervalRef = useRef<number | null>(null);
   const currentBpmRef = useRef<number>(bpm);
+  const startingBpmRef = useRef<number>(bpm);
+  const measureCountRef = useRef<number>(0); // Track measures for BPM growth
+  const globalMeasureRef = useRef<number>(0); // Track global measure for UI display
+  const pendingRestartRef = useRef<boolean>(false);
+  const syncStartMetronomeRef = useRef<any>(null);
+
+  // Keep ref up to date
+  useEffect(() => {
+    syncStartMetronomeRef.current = syncStartMetronome;
+  });
+
+  // Sync volume with synth
+  useEffect(() => {
+    if (synthRef.current) {
+      synthRef.current.volume.value = volume;
+    }
+  }, [volume]);
 
   // Sync ref with state
   useEffect(() => {
@@ -184,7 +285,7 @@ export default function App() {
         if (isPlaying) {
           stopMetronome();
         } else {
-          startMetronome();
+          startMetronome(false);
         }
       }
     };
@@ -199,7 +300,6 @@ export default function App() {
       Tone.Transport.stop();
       Tone.Transport.cancel();
       partRef.current?.dispose();
-      if (bpmIntervalRef.current) clearInterval(bpmIntervalRef.current);
     };
   }, []);
 
@@ -213,10 +313,22 @@ export default function App() {
     localStorage.setItem('rhythmflow_routines', JSON.stringify(routines));
   }, [routines]);
 
+  // Sync sequence changes if playing
+  useEffect(() => {
+    if (isPlaying) {
+      // Schedule restart at the end of the current measure
+      pendingRestartRef.current = true;
+    }
+  }, [sequence, bpmGrowth, loopFlow, flowDurationType, flowDurationValue]);
+
   const handleBpmSubmit = () => {
     const newBpm = parseInt(tempBpm);
-    if (!isNaN(newBpm) && newBpm >= 20 && newBpm <= 400) {
+    if (!isNaN(newBpm) && newBpm >= 20 && newBpm <= 320) {
       setBpm(newBpm);
+      currentBpmRef.current = newBpm;
+      if (isPlaying) {
+        Tone.Transport.bpm.value = newBpm;
+      }
     } else {
       setTempBpm(bpm?.toString() || '120');
     }
@@ -234,7 +346,7 @@ export default function App() {
       }
       const avgInterval = intervals.reduce((a, b) => a + b) / intervals.length;
       const newBpm = Math.round(60000 / avgInterval);
-      if (newBpm >= 40 && newBpm <= 280) {
+      if (newBpm >= 20 && newBpm <= 320) {
         setBpm(newBpm);
         setTempBpm(newBpm.toString());
       }
@@ -253,13 +365,21 @@ export default function App() {
     }
   }, []);
 
-  const startMetronome = async () => {
+  const startMetronome = async (isRestart = false) => {
     try {
       if (Tone.getContext().state !== 'running') {
         await Tone.start();
       }
+      syncStartMetronome(isRestart);
+    } catch (error) {
+      console.error('Failed to start metronome:', error);
+      setIsPlaying(false);
+    }
+  };
 
-      if (isPlaying) {
+  const syncStartMetronome = (isRestart = false) => {
+    try {
+      if (isPlaying && !isRestart) {
         stopMetronome();
         return;
       }
@@ -269,20 +389,31 @@ export default function App() {
       Tone.Transport.cancel();
       Tone.Transport.bpm.value = bpm;
       currentBpmRef.current = bpm;
+      if (!isRestart) {
+        startingBpmRef.current = bpm; // Always save starting BPM for reset only on fresh start
+        measureCountRef.current = 0;
+        globalMeasureRef.current = 0;
+      }
       partRef.current?.dispose();
-      if (bpmIntervalRef.current) clearInterval(bpmIntervalRef.current);
 
-      let measureCount = 0;
-
-      // BPM Growth Logic (Time-based)
+      // BPM Growth Logic (Time-based) - Sample-accurate using Transport scheduling
       if (bpmGrowth.enabled && bpmGrowth.unit === 'time') {
-        bpmIntervalRef.current = window.setInterval(() => {
-          currentBpmRef.current += (bpmGrowth.amount || 0);
-          if (!isNaN(currentBpmRef.current) && isFinite(currentBpmRef.current)) {
-            Tone.Transport.bpm.rampTo(currentBpmRef.current, 1);
-            setBpm(Math.round(currentBpmRef.current));
-          }
-        }, (bpmGrowth.every || 1) * 60000);
+        const growthIntervalSeconds = (bpmGrowth.every || 1) * 60;
+        let nextChangeTime = growthIntervalSeconds; // Transport time starts at 0
+        const stopTime = flowDurationType === 'time' ? flowDurationValue * 60 : 3600; // 1 hour max
+        
+        // Schedule all BPM changes upfront for sample-accurate timing
+        while (nextChangeTime < stopTime) {
+          const changeTime = nextChangeTime;
+          Tone.Transport.schedule((time) => {
+            currentBpmRef.current += (bpmGrowth.amount || 0);
+            if (!isNaN(currentBpmRef.current) && isFinite(currentBpmRef.current)) {
+              Tone.Transport.bpm.rampTo(currentBpmRef.current, 1);
+              Tone.Draw.schedule(() => setBpm(Math.round(currentBpmRef.current)), time);
+            }
+          }, changeTime);
+          nextChangeTime += growthIntervalSeconds;
+        }
       }
 
       const events: any[] = [];
@@ -290,15 +421,25 @@ export default function App() {
 
       sequence.forEach((step, idx) => {
         const [num, den] = step.timeSignature.split('/').map(Number);
-        const beatsPerMeasure = num || 4;
+        
+        // For compound time (6/8, 9/8, 12/8), use effective beats
+        // e.g., 6/8 = 2 beats (not 6), 9/8 = 3 beats (not 9)
+        const effectiveBeats = getEffectiveBeats(step.timeSignature);
+        const beatsPerMeasure = effectiveBeats || 4;
         
         // Use ticks for absolute precision regardless of BPM changes
-        const subdivisionTicks = Tone.Time(step.subdivision).toTicks();
-        const beatTicks = Tone.Time(`${den}n`).toTicks();
-        const measureTicks = beatsPerMeasure * beatTicks;
+        const subdivisionTicks = Math.round(Tone.Time(step.subdivision).toTicks());
         
-        // Resolution is the finest of either beat or subdivision
-        const resolutionTicks = Math.min(subdivisionTicks, beatTicks);
+        // Calculate beat ticks based on time signature type
+        let beatTicks: number;
+        if (isCompoundTimeSignature(step.timeSignature)) {
+          const baseBeatTicks = Tone.Time(`${den}n`).toTicks();
+          beatTicks = Math.round(baseBeatTicks * 3);
+        } else {
+          beatTicks = Math.round(Tone.Time(`${den}n`).toTicks());
+        }
+        
+        const measureTicks = beatsPerMeasure * beatTicks;
         
         let stepMeasures = step.measures;
         if (sequence.length === 1 && step.durationType === 'time') {
@@ -309,59 +450,146 @@ export default function App() {
           stepMeasures = 1; 
         }
 
-        const totalTicksInStep = stepMeasures * measureTicks;
-        const numEvents = Math.round(totalTicksInStep / resolutionTicks);
+        const measureEventsMap = new Map<number, any>();
 
-        for (let i = 0; i < numEvents; i++) {
-          const currentTickInStep = i * resolutionTicks;
-          const isMainBeat = currentTickInStep % beatTicks === 0;
-          const isSubdivisionBeat = currentTickInStep % subdivisionTicks === 0;
+        // 1. Add main beats
+        for (let b = 0; b < beatsPerMeasure; b++) {
+          const tickInMeasure = b * beatTicks;
+          measureEventsMap.set(tickInMeasure, {
+            tickInMeasure,
+            isAccent: b === 0,
+            isMainBeat: true,
+            isSubdivisionBeat: false
+          });
+        }
+
+        // 2. Add subdivision beats
+        const numSubdivisions = Math.floor(measureTicks / subdivisionTicks);
+        for (let s = 0; s <= numSubdivisions; s++) {
+          const tickInMeasure = Math.round(s * subdivisionTicks);
+          if (tickInMeasure >= measureTicks) break;
+
+          if (measureEventsMap.has(tickInMeasure)) {
+            const ev = measureEventsMap.get(tickInMeasure);
+            ev.isSubdivisionBeat = true;
+          } else {
+            measureEventsMap.set(tickInMeasure, {
+              tickInMeasure,
+              isAccent: tickInMeasure === 0,
+              isMainBeat: false,
+              isSubdivisionBeat: true
+            });
+          }
+        }
+
+        // To ensure the UI always counts all main beats correctly (e.g. 1, 2, 3, 4, 5, 6, 7 in 7/8),
+        // we must ALWAYS include main beats as UI events, even if they aren't sounded.
+        const isSubdivisionLong = subdivisionTicks >= beatTicks;
+        const finalMeasureEvents = Array.from(measureEventsMap.values())
+          .map(ev => {
+            // Determine if this event should make a sound
+            const shouldSound = isSubdivisionLong ? ev.isSubdivisionBeat : (ev.isMainBeat || ev.isSubdivisionBeat);
+            // It is an event if it should sound OR if it's a main beat (needed for UI counting)
+            const isEvent = shouldSound || ev.isMainBeat;
+            return { ...ev, shouldSound, isEvent };
+          })
+          .filter(ev => ev.isEvent)
+          .sort((a, b) => a.tickInMeasure - b.tickInMeasure);
+
+        for (let m = 0; m < stepMeasures; m++) {
+          const measureStartTick = m * measureTicks;
           
-          if (isMainBeat || isSubdivisionBeat) {
-            const beatNumber = Math.floor(currentTickInStep / beatTicks) % beatsPerMeasure + 1;
-            const isAccent = isMainBeat && beatNumber === 1;
-            const measureInStep = Math.floor(currentTickInStep / measureTicks) + 1;
+          for (const ev of finalMeasureEvents) {
+            const absoluteTick = accumulatedTicks + measureStartTick + ev.tickInMeasure;
+            const beatNumber = Math.floor(ev.tickInMeasure / beatTicks) + 1;
+            const measureInStep = m + 1;
+            const beatFractional = ev.tickInMeasure / beatTicks + 1;
+            const remainder = (ev.tickInMeasure % beatTicks) / beatTicks;
+            const remainderType = classifyRemainder(remainder);
 
             events.push({
-              time: (accumulatedTicks + currentTickInStep) + "i",
-              isAccent,
-              isMainBeat,
-              isSoundBeat: isMainBeat || isSubdivisionBeat,
+              time: absoluteTick + "i",
+              isAccent: ev.isAccent,
+              isMainBeat: ev.isMainBeat,
+              isSoundBeat: ev.shouldSound, // ONLY sound if it's supposed to
+              isUIBeat: true,              // All these events trigger UI updates
               stepIdx: idx,
               measure: measureInStep,
               beat: beatNumber,
+              beatFractional,
+              remainder,
+              remainderType,
               subdivision: step.subdivision
             });
           }
         }
-        accumulatedTicks += totalTicksInStep;
+        accumulatedTicks += stepMeasures * measureTicks;
       });
 
       partRef.current = new Tone.Part((time, event) => {
-        // Play sound only on subdivision beats
+        // If a sequence change is pending, wait until the start of a measure to apply it
+        if (pendingRestartRef.current && event.isMainBeat && event.beat === 1) {
+          pendingRestartRef.current = false;
+          // Use Tone.Draw.schedule to safely execute the restart on the main thread
+          // exactly when the visual frame for the new measure hits.
+          // We pass `true` to keep the absolute counters running.
+          Tone.Draw.schedule(() => {
+            if (syncStartMetronomeRef.current) {
+              syncStartMetronomeRef.current(true);
+            }
+          }, time);
+          return;
+        }
+
+        // Update UI FIRST for sample-accurate sync with audio
+        if (event.isUIBeat) {
+          Tone.Draw.schedule(() => {
+            const isWholeBeat = event.remainderType === 'whole';
+            const mainBeat = Math.floor(event.beatFractional);
+            
+            setCurrentStepIdx(event.stepIdx);
+            setCurrentMeasure(globalMeasureRef.current);
+            setCurrentBeat(mainBeat);
+            setVisualBeat(mainBeat - 1);
+            
+            if (!isWholeBeat && event.isSoundBeat) {
+              setGhostBeat(event.beatFractional);
+              setGhostType(event.remainderType);
+            } else if (isWholeBeat) {
+              setGhostBeat(null);
+              setGhostType(null);
+            }
+          }, time);
+        }
+
+        // Play sound AFTER UI update for perfect sync
         if (event.isSoundBeat) {
           playClick(time, event.isAccent);
         }
 
-        // Update UI on every main beat
-        if (event.isMainBeat) {
-          if (event.beat === 1) {
-            measureCount++;
-            if (bpmGrowth.enabled && bpmGrowth.unit === 'measures' && measureCount % (bpmGrowth.every || 4) === 0) {
+        // BPM Growth on measure completion and global measure tracking
+        if (event.isMainBeat && event.beat === 1) {
+          measureCountRef.current++;
+          globalMeasureRef.current++;
+          
+          console.log(`[Loop] Global Measure ${globalMeasureRef.current}, Step ${event.stepIdx}, Beat ${event.beat}`);
+          
+          const every = bpmGrowth.every || 4;
+          
+          if (bpmGrowth.enabled && bpmGrowth.unit === 'measures') {
+            const shouldGrow = measureCountRef.current > every && measureCountRef.current % every === 1;
+            
+            if (shouldGrow) {
+              const oldBpm = currentBpmRef.current;
               currentBpmRef.current += (bpmGrowth.amount || 0);
+              console.log(`[BPM Growth] Measure ${measureCountRef.current}: ${oldBpm} → ${currentBpmRef.current} BPM`);
+              
               if (!isNaN(currentBpmRef.current) && isFinite(currentBpmRef.current)) {
                 Tone.Transport.bpm.rampTo(currentBpmRef.current, 0.1);
                 Tone.Draw.schedule(() => setBpm(Math.round(currentBpmRef.current)), time);
               }
             }
           }
-
-          Tone.Draw.schedule(() => {
-            setCurrentStepIdx(event.stepIdx);
-            setCurrentMeasure(event.measure);
-            setCurrentBeat(event.beat);
-            setVisualBeat(event.beat - 1);
-          }, time);
         }
       }, events);
 
@@ -395,11 +623,23 @@ export default function App() {
     Tone.Transport.stop();
     Tone.Transport.cancel();
     partRef.current?.dispose();
-    if (bpmIntervalRef.current) clearInterval(bpmIntervalRef.current);
+    pendingRestartRef.current = false;
+    
+    // Always reset BPM to starting value
+    const resetBpm = startingBpmRef.current;
+    setBpm(resetBpm);
+    setTempBpm(resetBpm.toString());
+    currentBpmRef.current = resetBpm;
+    Tone.Transport.bpm.value = resetBpm;
+    
+    measureCountRef.current = 0;
+    
     setIsPlaying(false);
     setCurrentStepIdx(0);
     setCurrentMeasure(0);
     setCurrentBeat(0);
+    setGhostBeat(null);
+    setGhostType(null);
   };
 
   const clearFlow = () => {
@@ -613,26 +853,45 @@ export default function App() {
                     if (typeof newBpm === 'number' && !isNaN(newBpm)) {
                       setBpm(newBpm);
                       setTempBpm(newBpm.toString());
-                      if (isPlaying) {
-                        Tone.Transport.bpm.value = newBpm;
-                        currentBpmRef.current = newBpm;
-                      }
+                      currentBpmRef.current = newBpm;
+                      Tone.Transport.bpm.value = newBpm;
                     }
                   }} 
-                  min={40} 
-                  max={280} 
+                  min={20} 
+                  max={320} 
                   step={1}
                   className="py-4 cursor-pointer"
                 />
                 <div className="flex justify-between text-[8px] font-mono text-muted-foreground font-bold uppercase tracking-tighter">
+                  <span>Grave</span>
                   <span>Largo</span>
                   <span>Andante</span>
-                  <span>Allegro</span>
                   <span>Presto</span>
                 </div>
               </div>
-            </div>
 
+              {/* Volume Control */}
+              <div className="flex items-center gap-3">
+                <Volume2 size={14} className="text-primary shrink-0" />
+                <Slider 
+                  value={[volume + 20]} 
+                  onValueChange={(v) => {
+                    const newVol = Array.isArray(v) ? v[0] : v;
+                    if (typeof newVol === 'number') {
+                      setVolume(newVol - 20);
+                    }
+                  }} 
+                  min={0} 
+                  max={50} 
+                  step={1}
+                  className="w-16 cursor-pointer"
+                />
+                <span className="text-[10px] font-mono text-muted-foreground w-10 text-right">
+                  {volume > 0 ? '+' : ''}{volume}dB
+                </span>
+              </div>
+            </div>
+            
             {/* BPM Growth Quick Settings */}
             <div className="flex items-center gap-4 bg-card/40 p-4 rounded-2xl border border-white/5 backdrop-blur-md">
               <div className="flex items-center gap-2">
@@ -687,28 +946,57 @@ export default function App() {
                       />
                     ))}
 
+                    {/* Ghost Marker Ring - for between-beat events */}
+                    {ghostBeat !== null && (
+                      <motion.div
+                        key={`ghost-${ghostBeat}-${ghostType}`}
+                        initial={{ opacity: 0, scale: 0.8 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="absolute"
+                        style={{
+                          transform: `rotate(${((ghostBeat - 1) + (ghostBeat % 1)) * (360 / (parseInt(sequence[currentStepIdx]?.timeSignature.split('/')[0]) || 4))}deg) translateY(-150px)`,
+                        }}
+                      >
+                        {ghostType === 'fixed' && (
+                          <div className="w-4 h-4 rounded-full bg-primary/50 shadow-[0_0_12px_rgba(var(--primary),0.4)] border border-primary/30" />
+                        )}
+                        {ghostType === 'sliding' && (
+                          <div className="w-3 h-3 rounded-full bg-primary/30 shadow-[0_0_8px_rgba(var(--primary),0.2)] border border-primary/20" />
+                        )}
+                      </motion.div>
+                    )}
+
                     {/* Main Beat Indicators */}
-                    {Array.from({ length: sequence[currentStepIdx]?.timeSignature.split('/')[0] ? parseInt(sequence[currentStepIdx].timeSignature.split('/')[0]) : 4 }).map((_, i, arr) => {
+                    {Array.from({ length: getEffectiveBeats(sequence[currentStepIdx]?.timeSignature || '4/4') || 4 }).map((_, i, arr) => {
                       const numBeats = arr.length;
                       // Calculate angle based on number of beats
                       const angle = i * (360 / numBeats);
+                      const isActive = currentBeat === i + 1;
+                      const isAccent = isActive && i === 0;
+                      
                       return (
                         <motion.div
                           key={i}
                           className={cn(
-                            "absolute w-4 h-4 rounded-full transition-all duration-300",
-                            currentBeat === i + 1 
-                              ? "bg-primary shadow-[0_0_25px_rgba(var(--primary),0.8)] scale-125" 
-                              : "bg-white/5 border border-white/10"
+                            "absolute rounded-full",
+                            isActive 
+                              ? (isAccent
+                                ? "w-4 h-4 bg-red-500 shadow-[0_0_25px_rgba(239,68,68,0.8)] scale-125"
+                                : "w-4 h-4 bg-primary shadow-[0_0_25px_rgba(var(--primary),0.8)] scale-125")
+                              : "w-4 h-4 bg-white/5 border border-white/10"
                           )}
                           style={{
-                            transform: `rotate(${angle}deg) translateY(-140px)`
+                            transform: `rotate(${angle}deg) translateY(-140px)`,
                           }}
                         >
-                          {currentBeat === i + 1 && (
+                          {isActive && (
                             <motion.div 
                               layoutId="glow"
-                              className="absolute inset-[-8px] bg-primary/20 blur-md rounded-full"
+                              className={cn(
+                                "absolute inset-[-8px] blur-md rounded-full",
+                                isAccent ? "bg-red-500/30" : "bg-primary/20"
+                              )}
                             />
                           )}
                         </motion.div>
@@ -729,7 +1017,10 @@ export default function App() {
                         {sequence[currentStepIdx]?.label || 'STANDBY'}
                       </motion.div>
                     </AnimatePresence>
-                    <div className="text-9xl font-mono font-black text-white leading-none tracking-tighter drop-shadow-[0_0_20px_rgba(255,255,255,0.2)]">
+                    <div className={cn(
+                      "text-9xl font-mono font-black leading-none tracking-tighter drop-shadow-[0_0_20px_rgba(255,255,255,0.2)] transition-colors duration-100",
+                      isPlaying && currentBeat === 1 ? "text-red-500" : "text-white"
+                    )}>
                       {currentBeat || '0'}
                     </div>
                     <div className="mt-4 flex items-center justify-center gap-3">
@@ -752,7 +1043,7 @@ export default function App() {
                         ? "bg-white text-black hover:bg-zinc-200" 
                         : "bg-primary text-black hover:bg-primary/90 shadow-[0_0_40px_rgba(var(--primary),0.3)]"
                     )}
-                    onClick={startMetronome}
+                    onClick={() => startMetronome(false)}
                   >
                     <div className="absolute inset-0 bg-gradient-to-t from-black/10 to-transparent opacity-50" />
                     <div className="relative z-10 flex items-center justify-center gap-4">
@@ -1517,6 +1808,42 @@ export default function App() {
                           <span>**Reorder:** Use the arrows to move steps or the trash icon to delete them.</span>
                         </li>
                       </ul>
+                    </section>
+
+                    <section className="space-y-4">
+                      <h4 className="text-primary font-bold tracking-widest text-xs uppercase flex items-center gap-2">
+                        <Activity size={14} /> 3a. Compound Time Signatures
+                      </h4>
+                      <p className="text-muted-foreground text-sm leading-relaxed">
+                        RhythmFlow supports both <strong>simple</strong> and <strong>compound</strong> time signatures. Understanding the difference helps you practice more effectively.
+                      </p>
+                      <div className="bg-white/5 p-4 rounded-2xl border border-white/10 space-y-3">
+                        <div className="text-sm">
+                          <span className="text-white font-bold">Simple Time (e.g., 4/4, 3/4, 2/4):</span>
+                          <span className="text-muted-foreground"> The beat corresponds directly to the denominator. In 4/4, you count 1-2-3-4 with one beat per quarter note.</span>
+                        </div>
+                        <div className="text-sm">
+                          <span className="text-white font-bold">Compound Time (e.g., 6/8, 7/8, 9/8):</span>
+                          <span className="text-muted-foreground"> Each main beat is divided into three equal parts (triplets). The visual display shows the <strong>effective beats</strong>:</span>
+                        </div>
+                        <ul className="space-y-2 text-sm text-muted-foreground ml-4">
+                          <li className="flex gap-2">
+                            <span className="text-primary font-bold">•</span>
+                            <span><strong>6/8</strong> = 2 beats (counts as "1-2" with each beat containing 3 eighth notes)</span>
+                          </li>
+                          <li className="flex gap-2">
+                            <span className="text-primary font-bold">•</span>
+                            <span><strong>7/8</strong> = 7 effective beats (counts 1-2-3-4-5-6-7)</span>
+                          </li>
+                          <li className="flex gap-2">
+                            <span className="text-primary font-bold">•</span>
+                            <span><strong>9/8</strong> = 3 beats (counts as "1-2-3")</span>
+                          </li>
+                        </ul>
+                      </div>
+                      <p className="text-muted-foreground text-sm leading-relaxed">
+                        <span className="text-white font-bold">The Rhythm (Subdivision) setting</span> controls how the metronome sounds relative to these beats. You can create polyrhythms—for example, in 7/8 with <strong>Quarter</strong> subdivision, the display counts 1-2-3-4-5-6-7 while sound plays on beats 1, 3, 5, and 7. This is useful for practicing complex rhythms while keeping a steady pulse.
+                      </p>
                     </section>
 
                     <section className="space-y-4">
