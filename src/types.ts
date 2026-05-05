@@ -1,4 +1,4 @@
-export type Subdivision = '4n' | '8n' | '16n' | '8t' | '16t';
+export type Subdivision = '1n' | '2n' | '4n' | '8n' | '16n' | '8t' | '16t';
 
 export type DurationType = 'measures' | 'time' | 'loop';
 
