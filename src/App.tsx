@@ -5,14 +5,14 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import * as Tone from 'tone';
-import { 
-  Play, 
-  Square, 
-  Plus, 
-  Trash2, 
-  ChevronUp, 
-  ChevronDown, 
-  Music, 
+import {
+  Play,
+  Square,
+  Plus,
+  Trash2,
+  ChevronUp,
+  ChevronDown,
+  Music,
   Settings2,
   Clock,
   Activity,
@@ -37,85 +37,23 @@ import { Slider } from '@/components/ui/slider';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import { 
-  Select, 
-  SelectContent, 
-  SelectItem, 
-  SelectTrigger, 
-  SelectValue 
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
-import { SequenceStep, Subdivision, BpmGrowth, Routine, DurationType } from './types';
+import { SequenceStep, Subdivision, BpmGrowth, DurationType } from './types';
+import { useMetronome, getEffectiveBeats, isCompoundTimeSignature } from './hooks/useMetronome';
+import { useRoutines } from './hooks/useRoutines';
 
 type RemainderType = 'whole' | 'fixed' | 'sliding';
-
-const EPSILON = 0.001;
-const CONVENTIONAL_FRACTIONS = [0.25, 0.5, 0.75, 0.125, 0.375, 0.625, 0.875];
-const TRIPLET_FRACTIONS = [1/3, 2/3];
-
-function isApproximatelyEqual(a: number, b: number): boolean {
-  return Math.abs(a - b) < EPSILON;
-}
-
-function classifyRemainder(remainder: number): RemainderType {
-  if (isApproximatelyEqual(remainder, 0)) return 'whole';
-  
-  for (const frac of CONVENTIONAL_FRACTIONS) {
-    if (isApproximatelyEqual(remainder, frac)) return 'fixed';
-  }
-  
-  for (const frac of TRIPLET_FRACTIONS) {
-    if (isApproximatelyEqual(remainder, frac)) return 'sliding';
-  }
-  
-  return 'sliding';
-}
-
-// Compound time signatures: numerator divisible by 3 and > 3 (e.g., 6/8, 9/8, 12/8)
-function isCompoundTimeSignature(timeSignature: string): boolean {
-  const [num] = timeSignature.split('/').map(Number);
-  return num % 3 === 0 && num > 3;
-}
-
-// Get effective number of beats per measure
-function getEffectiveBeats(timeSignature: string): number {
-  const [num, den] = timeSignature.split('/').map(Number);
-  
-  // Compound time: numerator divisible by 3 (e.g., 6/8 = 2 beats, 9/8 = 3 beats)
-  if (isCompoundTimeSignature(timeSignature)) {
-    return num / 3;
-  }
-  
-  // Simple time
-  return num;
-}
-
-// Get the note value that represents one beat
-function getBeatNoteValue(timeSignature: string): string {
-  const [, den] = timeSignature.split('/').map(Number);
-  
-  if (isCompoundTimeSignature(timeSignature)) {
-    // Compound time: dotted note (e.g., 6/8 → dotted quarter = 4n with triplet)
-    // In Tone.js notation, we need the dotted note
-    // For 6/8, 9/8, 12/8: 1 beat = dotted quarter = "4n." or calculated as 4n * 1.5
-    return `${den}n`; // The base note value
-  }
-  
-  return `${den}n`;
-}
-
-// Get tick duration for one beat in compound time
-function getCompoundBeatTicks(den: number): number {
-  // For compound time (6/8, 9/8, 12/8), one beat = dotted note = 3 * (base note) / 2
-  // 6/8: 1 beat = dotted quarter = 3 * eighth notes / 2 = 1.5 * 8n
-  const eighthNoteTicks = Tone.Time('8n').toTicks();
-  // A dotted note = 1.5x the note value
-  return Math.round(eighthNoteTicks * 1.5);
-}
 
 const SUBDIVISIONS: { value: Subdivision; label: string; icon: React.ReactNode }[] = [
   { value: '1n', label: 'Whole', icon: <NoteIcon type="1n" /> },
@@ -184,14 +122,14 @@ export default function App() {
   const [bpm, setBpm] = useState(120);
   const [isEditingBpm, setIsEditingBpm] = useState(false);
   const [tempBpm, setTempBpm] = useState('120');
-  const [volume, setVolume] = useState(0); // Volume in dB: -20 to +12
+  const [volume, setVolume] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [sequence, setSequence] = useState<SequenceStep[]>([
     { id: '1', measures: 2, subdivision: '4n', timeSignature: '4/4', label: 'Intro', durationType: 'measures' },
     { id: '2', measures: 2, subdivision: '8n', timeSignature: '4/4', label: 'Build', durationType: 'measures' },
     { id: '3', measures: 2, subdivision: '16n', timeSignature: '4/4', label: 'Main', durationType: 'measures' },
   ]);
-  
+
   const [bpmGrowth, setBpmGrowth] = useState<BpmGrowth>({
     enabled: false,
     amount: 5,
@@ -199,15 +137,10 @@ export default function App() {
     unit: 'measures'
   });
 
-  const [loopFlow, setLoopFlow] = useState(true);
+  // flowDurationType covers all cases: 'loop' = infinite, 'measures' = stop/loop after N measures, 'time' = stop/loop after N minutes
   const [flowDurationType, setFlowDurationType] = useState<DurationType>('loop');
-  const [flowDurationValue, setFlowDurationValue] = useState(1); // 1 minute or 1 measure
-
-  const [routines, setRoutines] = useState<Routine[]>(() => {
-    const saved = localStorage.getItem('rhythmflow_routines');
-    return saved ? JSON.parse(saved) : [];
-  });
-  const [activeRoutineId, setActiveRoutineId] = useState<string | null>(null);
+  const [flowDurationValue, setFlowDurationValue] = useState(1);
+  const [loopFlow, setLoopFlow] = useState(true);
 
   const [currentStepIdx, setCurrentStepIdx] = useState(0);
   const [currentMeasure, setCurrentMeasure] = useState(0);
@@ -225,110 +158,106 @@ export default function App() {
   const [routineToRenameId, setRoutineToRenameId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState('flow');
 
-  // Persist routines to localStorage
-  useEffect(() => {
-    localStorage.setItem('rhythmflow_routines', JSON.stringify(routines));
-  }, [routines]);
+  const {
+    routines,
+    activeRoutineId,
+    setActiveRoutineId,
+    saveRoutine,
+    renameRoutine,
+    deleteRoutine,
+    duplicateRoutine,
+  } = useRoutines();
 
-  const synthRef = useRef<Tone.Synth | null>(null);
-  const partRef = useRef<Tone.Part | null>(null);
-  const currentBpmRef = useRef<number>(bpm);
-  const startingBpmRef = useRef<number>(bpm);
-  const measureCountRef = useRef<number>(0); // Track measures for BPM growth
-  const globalMeasureRef = useRef<number>(0); // Track global measure for UI display
-  const pendingRestartRef = useRef<boolean>(false);
-  const syncStartMetronomeRef = useRef<any>(null);
-
-  // Keep ref up to date
+  // Options ref so metronome callbacks always read fresh state without stale closures
+  const optionsRef = useRef({ bpm, sequence, bpmGrowth, flowDurationType, flowDurationValue, loopFlow });
   useEffect(() => {
-    syncStartMetronomeRef.current = syncStartMetronome;
+    optionsRef.current = { bpm, sequence, bpmGrowth, flowDurationType, flowDurationValue, loopFlow };
   });
 
+  const metronome = useMetronome(() => ({
+    bpm: optionsRef.current.bpm,
+    sequence: optionsRef.current.sequence,
+    bpmGrowth: optionsRef.current.bpmGrowth,
+    flowDurationType: optionsRef.current.flowDurationType,
+    flowDurationValue: optionsRef.current.flowDurationValue,
+    onBpmChange: (newBpm) => {
+      setBpm(newBpm);
+      setTempBpm(newBpm.toString());
+    },
+    onUIUpdate: ({ stepIdx, measure, beat, visualBeat, ghostBeat, ghostType }) => {
+      setCurrentStepIdx(stepIdx);
+      setCurrentMeasure(measure);
+      setCurrentBeat(beat);
+      setVisualBeat(visualBeat);
+      setGhostBeat(ghostBeat);
+      setGhostType(ghostType);
+    },
+    onStop: stopMetronome,
+  }));
+
+  // Initialize synth once
+  useEffect(() => metronome.initSynth(), []);
+
   // Sync volume with synth
+  useEffect(() => { metronome.setVolume(volume); }, [volume]);
+
+  // Sync BPM with Transport
+  useEffect(() => { Tone.Transport.bpm.value = bpm; }, [bpm]);
+
+  // Signal metronome to restart at next measure boundary when sequence changes while playing
   useEffect(() => {
-    if (synthRef.current) {
-      synthRef.current.volume.value = volume;
-    }
-  }, [volume]);
+    if (isPlaying) metronome.notifySequenceChange();
+  }, [sequence, bpmGrowth, flowDurationType, flowDurationValue]);
 
-  // Sync ref with state
-  useEffect(() => {
-    currentBpmRef.current = bpm;
-  }, [bpm]);
-
-  // Initialize Synth once
-  useEffect(() => {
-    synthRef.current = new Tone.Synth({
-      oscillator: { type: 'sine' },
-      envelope: {
-        attack: 0.001,
-        decay: 0.1,
-        sustain: 0,
-        release: 0.1
-      },
-      volume: 6 // Increase base volume by 6dB
-    }).toDestination();
-
-    return () => {
-      synthRef.current?.dispose();
-    };
-  }, []);
-
-  // Keyboard Shortcut Listener
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space') {
-        // Only trigger if not typing in an input
-        if (document.activeElement?.tagName === 'INPUT') return;
-        
-        e.preventDefault();
-        if (isPlaying) {
-          stopMetronome();
-        } else {
-          startMetronome(false);
-        }
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isPlaying, sequence, bpm, bpmGrowth, loopFlow, flowDurationType, flowDurationValue]);
-
-  // Global Cleanup
+  // Global cleanup
   useEffect(() => {
     return () => {
       Tone.Transport.stop();
       Tone.Transport.cancel();
-      partRef.current?.dispose();
     };
   }, []);
 
-  // Update BPM
+  // Keyboard shortcut
   useEffect(() => {
-    Tone.Transport.bpm.value = bpm;
-  }, [bpm]);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        if (document.activeElement?.tagName === 'INPUT') return;
+        e.preventDefault();
+        if (isPlaying) stopMetronome();
+        else startMetronome(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isPlaying, sequence, bpm, bpmGrowth, flowDurationType, flowDurationValue]);
 
-  // Persist Routines
-  useEffect(() => {
-    localStorage.setItem('rhythmflow_routines', JSON.stringify(routines));
-  }, [routines]);
-
-  // Sync sequence changes if playing
-  useEffect(() => {
-    if (isPlaying) {
-      // Schedule restart at the end of the current measure
-      pendingRestartRef.current = true;
+  const startMetronome = async (isRestart = false) => {
+    try {
+      setIsPlaying(true);
+      await metronome.start(isRestart);
+    } catch {
+      setIsPlaying(false);
     }
-  }, [sequence, bpmGrowth, loopFlow, flowDurationType, flowDurationValue]);
+  };
+
+  const stopMetronome = () => {
+    const resetBpm = metronome.stop();
+    setBpm(resetBpm);
+    setTempBpm(resetBpm.toString());
+    setIsPlaying(false);
+    setCurrentStepIdx(0);
+    setCurrentMeasure(0);
+    setCurrentBeat(0);
+    setGhostBeat(null);
+    setGhostType(null);
+  };
 
   const handleBpmSubmit = () => {
     const newBpm = parseInt(tempBpm);
     if (!isNaN(newBpm) && newBpm >= 20 && newBpm <= 320) {
       setBpm(newBpm);
-      currentBpmRef.current = newBpm;
-      if (isPlaying) {
-        Tone.Transport.bpm.value = newBpm;
-      }
+      metronome.currentBpmRef.current = newBpm;
+      if (isPlaying) Tone.Transport.bpm.value = newBpm;
     } else {
       setTempBpm(bpm?.toString() || '120');
     }
@@ -342,7 +271,7 @@ export default function App() {
     if (newTapTimes.length >= 2) {
       const intervals = [];
       for (let i = 1; i < newTapTimes.length; i++) {
-        intervals.push(newTapTimes[i] - newTapTimes[i-1]);
+        intervals.push(newTapTimes[i] - newTapTimes[i - 1]);
       }
       const avgInterval = intervals.reduce((a, b) => a + b) / intervals.length;
       const newBpm = Math.round(60000 / avgInterval);
@@ -353,316 +282,17 @@ export default function App() {
     }
   };
 
-  const playClick = useCallback((time: number, isAccent: boolean) => {
-    if (!synthRef.current) return;
-    const playTime = typeof time === 'number' && !isNaN(time) ? time : Tone.now();
-    try {
-      const frequency = isAccent ? 880 : 440; 
-      const velocity = isAccent ? 1.0 : 0.7; // Increased from 0.6 to 0.7
-      synthRef.current.triggerAttackRelease(frequency, '32n', playTime, velocity);
-    } catch (e) {
-      console.error('Audio playback error:', e);
-    }
-  }, []);
-
-  const startMetronome = async (isRestart = false) => {
-    try {
-      if (Tone.getContext().state !== 'running') {
-        await Tone.start();
-      }
-      syncStartMetronome(isRestart);
-    } catch (error) {
-      console.error('Failed to start metronome:', error);
-      setIsPlaying(false);
-    }
-  };
-
-  const syncStartMetronome = (isRestart = false) => {
-    try {
-      if (isPlaying && !isRestart) {
-        stopMetronome();
-        return;
-      }
-
-      setIsPlaying(true);
-      Tone.Transport.stop();
-      Tone.Transport.cancel();
-      Tone.Transport.bpm.value = bpm;
-      currentBpmRef.current = bpm;
-      if (!isRestart) {
-        startingBpmRef.current = bpm; // Always save starting BPM for reset only on fresh start
-        measureCountRef.current = 0;
-        globalMeasureRef.current = 0;
-      }
-      partRef.current?.dispose();
-
-      // BPM Growth Logic (Time-based) - Sample-accurate using Transport scheduling
-      if (bpmGrowth.enabled && bpmGrowth.unit === 'time') {
-        const growthIntervalSeconds = (bpmGrowth.every || 1) * 60;
-        let nextChangeTime = growthIntervalSeconds; // Transport time starts at 0
-        const stopTime = flowDurationType === 'time' ? flowDurationValue * 60 : 3600; // 1 hour max
-        
-        // Schedule all BPM changes upfront for sample-accurate timing
-        while (nextChangeTime < stopTime) {
-          const changeTime = nextChangeTime;
-          Tone.Transport.schedule((time) => {
-            currentBpmRef.current += (bpmGrowth.amount || 0);
-            if (!isNaN(currentBpmRef.current) && isFinite(currentBpmRef.current)) {
-              Tone.Transport.bpm.rampTo(currentBpmRef.current, 1);
-              Tone.Draw.schedule(() => setBpm(Math.round(currentBpmRef.current)), time);
-            }
-          }, changeTime);
-          nextChangeTime += growthIntervalSeconds;
-        }
-      }
-
-      const events: any[] = [];
-      let accumulatedTicks = 0;
-
-      sequence.forEach((step, idx) => {
-        const [num, den] = step.timeSignature.split('/').map(Number);
-        
-        // For compound time (6/8, 9/8, 12/8), use effective beats
-        // e.g., 6/8 = 2 beats (not 6), 9/8 = 3 beats (not 9)
-        const effectiveBeats = getEffectiveBeats(step.timeSignature);
-        const beatsPerMeasure = effectiveBeats || 4;
-        
-        // Use ticks for absolute precision regardless of BPM changes
-        const subdivisionTicks = Math.round(Tone.Time(step.subdivision).toTicks());
-        
-        // Calculate beat ticks based on time signature type
-        let beatTicks: number;
-        if (isCompoundTimeSignature(step.timeSignature)) {
-          const baseBeatTicks = Tone.Time(`${den}n`).toTicks();
-          beatTicks = Math.round(baseBeatTicks * 3);
-        } else {
-          beatTicks = Math.round(Tone.Time(`${den}n`).toTicks());
-        }
-        
-        const measureTicks = beatsPerMeasure * beatTicks;
-        
-        let stepMeasures = step.measures;
-        if (sequence.length === 1 && step.durationType === 'time') {
-          const totalSeconds = step.measures * 60;
-          const secondsPerMeasure = (beatsPerMeasure * (den === 8 ? 0.5 : 1)) * (60 / currentBpmRef.current);
-          stepMeasures = Math.ceil(totalSeconds / secondsPerMeasure);
-        } else if (sequence.length === 1 && step.durationType === 'loop') {
-          stepMeasures = 1; 
-        }
-
-        const measureEventsMap = new Map<number, any>();
-
-        // 1. Add main beats
-        for (let b = 0; b < beatsPerMeasure; b++) {
-          const tickInMeasure = b * beatTicks;
-          measureEventsMap.set(tickInMeasure, {
-            tickInMeasure,
-            isAccent: b === 0,
-            isMainBeat: true,
-            isSubdivisionBeat: false
-          });
-        }
-
-        // 2. Add subdivision beats
-        const numSubdivisions = Math.floor(measureTicks / subdivisionTicks);
-        for (let s = 0; s <= numSubdivisions; s++) {
-          const tickInMeasure = Math.round(s * subdivisionTicks);
-          if (tickInMeasure >= measureTicks) break;
-
-          if (measureEventsMap.has(tickInMeasure)) {
-            const ev = measureEventsMap.get(tickInMeasure);
-            ev.isSubdivisionBeat = true;
-          } else {
-            measureEventsMap.set(tickInMeasure, {
-              tickInMeasure,
-              isAccent: tickInMeasure === 0,
-              isMainBeat: false,
-              isSubdivisionBeat: true
-            });
-          }
-        }
-
-        // To ensure the UI always counts all main beats correctly (e.g. 1, 2, 3, 4, 5, 6, 7 in 7/8),
-        // we must ALWAYS include main beats as UI events, even if they aren't sounded.
-        const isSubdivisionLong = subdivisionTicks >= beatTicks;
-        const finalMeasureEvents = Array.from(measureEventsMap.values())
-          .map(ev => {
-            // Determine if this event should make a sound
-            const shouldSound = isSubdivisionLong ? ev.isSubdivisionBeat : (ev.isMainBeat || ev.isSubdivisionBeat);
-            // It is an event if it should sound OR if it's a main beat (needed for UI counting)
-            const isEvent = shouldSound || ev.isMainBeat;
-            return { ...ev, shouldSound, isEvent };
-          })
-          .filter(ev => ev.isEvent)
-          .sort((a, b) => a.tickInMeasure - b.tickInMeasure);
-
-        for (let m = 0; m < stepMeasures; m++) {
-          const measureStartTick = m * measureTicks;
-          
-          for (const ev of finalMeasureEvents) {
-            const absoluteTick = accumulatedTicks + measureStartTick + ev.tickInMeasure;
-            const beatNumber = Math.floor(ev.tickInMeasure / beatTicks) + 1;
-            const measureInStep = m + 1;
-            const beatFractional = ev.tickInMeasure / beatTicks + 1;
-            const remainder = (ev.tickInMeasure % beatTicks) / beatTicks;
-            const remainderType = classifyRemainder(remainder);
-
-            events.push({
-              time: absoluteTick + "i",
-              isAccent: ev.isAccent,
-              isMainBeat: ev.isMainBeat,
-              isSoundBeat: ev.shouldSound, // ONLY sound if it's supposed to
-              isUIBeat: true,              // All these events trigger UI updates
-              stepIdx: idx,
-              measure: measureInStep,
-              beat: beatNumber,
-              beatFractional,
-              remainder,
-              remainderType,
-              subdivision: step.subdivision
-            });
-          }
-        }
-        accumulatedTicks += stepMeasures * measureTicks;
-      });
-
-      partRef.current = new Tone.Part((time, event) => {
-        // If a sequence change is pending, wait until the start of a measure to apply it
-        if (pendingRestartRef.current && event.isMainBeat && event.beat === 1) {
-          pendingRestartRef.current = false;
-          // Use Tone.Draw.schedule to safely execute the restart on the main thread
-          // exactly when the visual frame for the new measure hits.
-          // We pass `true` to keep the absolute counters running.
-          Tone.Draw.schedule(() => {
-            if (syncStartMetronomeRef.current) {
-              syncStartMetronomeRef.current(true);
-            }
-          }, time);
-          return;
-        }
-
-        // Update UI FIRST for sample-accurate sync with audio
-        if (event.isUIBeat) {
-          Tone.Draw.schedule(() => {
-            const isWholeBeat = event.remainderType === 'whole';
-            const mainBeat = Math.floor(event.beatFractional);
-            
-            setCurrentStepIdx(event.stepIdx);
-            setCurrentMeasure(globalMeasureRef.current);
-            setCurrentBeat(mainBeat);
-            setVisualBeat(mainBeat - 1);
-            
-            if (!isWholeBeat && event.isSoundBeat) {
-              setGhostBeat(event.beatFractional);
-              setGhostType(event.remainderType);
-            } else if (isWholeBeat) {
-              setGhostBeat(null);
-              setGhostType(null);
-            }
-          }, time);
-        }
-
-        // Play sound AFTER UI update for perfect sync
-        if (event.isSoundBeat) {
-          playClick(time, event.isAccent);
-        }
-
-        // BPM Growth on measure completion and global measure tracking
-        if (event.isMainBeat && event.beat === 1) {
-          measureCountRef.current++;
-          globalMeasureRef.current++;
-          
-          console.log(`[Loop] Global Measure ${globalMeasureRef.current}, Step ${event.stepIdx}, Beat ${event.beat}`);
-          
-          const every = bpmGrowth.every || 4;
-          
-          if (bpmGrowth.enabled && bpmGrowth.unit === 'measures') {
-            const shouldGrow = measureCountRef.current > every && measureCountRef.current % every === 1;
-            
-            if (shouldGrow) {
-              const oldBpm = currentBpmRef.current;
-              currentBpmRef.current += (bpmGrowth.amount || 0);
-              console.log(`[BPM Growth] Measure ${measureCountRef.current}: ${oldBpm} → ${currentBpmRef.current} BPM`);
-              
-              if (!isNaN(currentBpmRef.current) && isFinite(currentBpmRef.current)) {
-                Tone.Transport.bpm.rampTo(currentBpmRef.current, 0.1);
-                Tone.Draw.schedule(() => setBpm(Math.round(currentBpmRef.current)), time);
-              }
-            }
-          }
-        }
-      }, events);
-
-      partRef.current.loop = flowDurationType === 'loop' || (flowDurationType === 'measures' && loopFlow) || (flowDurationType === 'time' && loopFlow);
-      partRef.current.loopEnd = accumulatedTicks + "i";
-      partRef.current.start(0);
-
-      // Handle "Measures" duration type
-      if (flowDurationType === 'measures' && !loopFlow) {
-        const totalTicks = flowDurationValue * (Tone.Time('1m').toTicks());
-        Tone.Transport.schedule((t) => {
-          Tone.Draw.schedule(() => stopMetronome(), t);
-        }, totalTicks + "i");
-      }
-
-      // Handle "Time" duration type
-      if (flowDurationType === 'time') {
-        Tone.Transport.schedule((t) => {
-          Tone.Draw.schedule(() => stopMetronome(), t);
-        }, flowDurationValue * 60);
-      }
-
-      Tone.Transport.start();
-    } catch (error) {
-      console.error('Failed to start metronome:', error);
-      setIsPlaying(false);
-    }
-  };
-
-  const stopMetronome = () => {
-    Tone.Transport.stop();
-    Tone.Transport.cancel();
-    partRef.current?.dispose();
-    pendingRestartRef.current = false;
-    
-    // Always reset BPM to starting value
-    const resetBpm = startingBpmRef.current;
-    setBpm(resetBpm);
-    setTempBpm(resetBpm.toString());
-    currentBpmRef.current = resetBpm;
-    Tone.Transport.bpm.value = resetBpm;
-    
-    measureCountRef.current = 0;
-    
-    setIsPlaying(false);
-    setCurrentStepIdx(0);
-    setCurrentMeasure(0);
-    setCurrentBeat(0);
-    setGhostBeat(null);
-    setGhostType(null);
-  };
-
-  const clearFlow = () => {
-    setIsClearModalOpen(true);
-  };
-
-  const confirmClearFlow = () => {
-    setSequence([{ id: '1', measures: 4, subdivision: '4n', timeSignature: '4/4', label: 'New Phase', durationType: 'measures' }]);
-    setActiveRoutineId(null);
-    setIsClearModalOpen(false);
-  };
-
-  const saveRoutine = (asNew: boolean = false) => {
+  const openSaveModal = (asNew = false) => {
     setIsSavingAsNew(asNew);
     setRoutineToRenameId(null);
-    const defaultName = asNew || !activeRoutineId 
-      ? `Routine ${routines.length + 1}` 
+    const defaultName = asNew || !activeRoutineId
+      ? `Routine ${routines.length + 1}`
       : routines.find(r => r.id === activeRoutineId)?.name || `Routine ${routines.length + 1}`;
     setRoutineNameInput(defaultName);
     setIsSaveModalOpen(true);
   };
 
-  const openRenameModal = (routine: Routine) => {
+  const openRenameModal = (routine: { id: string; name: string }) => {
     setRoutineToRenameId(routine.id);
     setRoutineNameInput(routine.name);
     setIsSavingAsNew(false);
@@ -673,33 +303,20 @@ export default function App() {
     if (!routineNameInput.trim()) return;
 
     if (routineToRenameId) {
-      setRoutines(prev => prev.map(r => r.id === routineToRenameId ? { ...r, name: routineNameInput } : r));
+      renameRoutine(routineToRenameId, routineNameInput);
       setRoutineToRenameId(null);
     } else {
-      const newId = (isSavingAsNew || !activeRoutineId) ? Math.random().toString(36).substr(2, 9) : activeRoutineId;
-      const newRoutine: Routine = {
-        id: newId,
-        name: routineNameInput,
-        sequence: JSON.parse(JSON.stringify(sequence)), // Deep copy to avoid reference issues
-        bpm,
-        bpmGrowth: { ...bpmGrowth },
-        loopFlow,
-        flowDurationType,
-        flowDurationValue
-      };
-
-      if (!isSavingAsNew && activeRoutineId) {
-        setRoutines(prev => prev.map(r => r.id === activeRoutineId ? newRoutine : r));
-      } else {
-        setRoutines(prev => [...prev, newRoutine]);
-        setActiveRoutineId(newRoutine.id);
-      }
+      saveRoutine(
+        routineNameInput,
+        { sequence, bpm, bpmGrowth, loopFlow, flowDurationType, flowDurationValue },
+        { asNew: isSavingAsNew, existingId: activeRoutineId }
+      );
     }
-    
+
     setIsSaveModalOpen(false);
   };
 
-  const loadRoutine = (routine: Routine) => {
+  const loadRoutine = (routine: { id: string; sequence: SequenceStep[]; bpm: number; bpmGrowth: BpmGrowth; loopFlow: boolean; flowDurationType: DurationType; flowDurationValue: number }) => {
     setSequence(routine.sequence || []);
     setBpm(routine.bpm || 120);
     setBpmGrowth(routine.bpmGrowth || { enabled: false, amount: 5, every: 4, unit: 'measures' });
@@ -710,15 +327,6 @@ export default function App() {
     setActiveTab('flow');
   };
 
-  const deleteRoutine = (id: string) => {
-    setRoutines(routines.filter(r => r.id !== id));
-    if (activeRoutineId === id) setActiveRoutineId(null);
-  };
-
-  const renameRoutine = (id: string, newName: string) => {
-    setRoutines(routines.map(r => r.id === id ? { ...r, name: newName } : r));
-  };
-
   const addStep = () => {
     const lastStep = sequence[sequence.length - 1];
     const newStep: SequenceStep = {
@@ -727,36 +335,28 @@ export default function App() {
       durationType: 'measures',
       subdivision: lastStep?.subdivision || '4n',
       timeSignature: lastStep?.timeSignature || '4/4',
-      label: `Step ${sequence.length + 1}`
+      label: `Step ${sequence.length + 1}`,
     };
     setSequence([...sequence, newStep]);
   };
 
   const removeStep = (id: string) => {
-    if (sequence.length > 1) {
-      setSequence(sequence.filter(s => s.id !== id));
-    }
+    if (sequence.length > 1) setSequence(sequence.filter(s => s.id !== id));
   };
 
   const updateStep = (id: string, updates: Partial<SequenceStep>) => {
     setSequence(sequence.map(s => {
-      if (s.id === id) {
-        const newStep = { ...s, ...updates };
-        // Auto-adjust subdivision if time signature denominator changes
-        if (updates.timeSignature) {
-          const [_, newDen] = updates.timeSignature.split('/').map(Number);
-          const [__, oldDen] = s.timeSignature.split('/').map(Number);
-          if (newDen !== oldDen) {
-            if (newDen === 8 && s.subdivision === '4n') {
-              newStep.subdivision = '8n';
-            } else if (newDen === 4 && s.subdivision === '8n') {
-              newStep.subdivision = '4n';
-            }
-          }
+      if (s.id !== id) return s;
+      const newStep = { ...s, ...updates };
+      if (updates.timeSignature) {
+        const [, newDen] = updates.timeSignature.split('/').map(Number);
+        const [, oldDen] = s.timeSignature.split('/').map(Number);
+        if (newDen !== oldDen) {
+          if (newDen === 8 && s.subdivision === '4n') newStep.subdivision = '8n';
+          else if (newDen === 4 && s.subdivision === '8n') newStep.subdivision = '4n';
         }
-        return newStep;
       }
-      return s;
+      return newStep;
     }));
   };
 
@@ -767,6 +367,12 @@ export default function App() {
       [newSequence[index], newSequence[targetIndex]] = [newSequence[targetIndex], newSequence[index]];
       setSequence(newSequence);
     }
+  };
+
+  const confirmClearFlow = () => {
+    setSequence([{ id: '1', measures: 4, subdivision: '4n', timeSignature: '4/4', label: 'New Phase', durationType: 'measures' }]);
+    setActiveRoutineId(null);
+    setIsClearModalOpen(false);
   };
 
   return (
@@ -788,9 +394,9 @@ export default function App() {
                 <div className="w-1.5 h-1.5 rounded-full bg-primary/20" />
               </div>
               <span className="text-[10px] font-mono uppercase tracking-[0.3em] text-primary/60 font-bold">Precision Engine Active</span>
-              <Button 
-                variant="ghost" 
-                size="icon" 
+              <Button
+                variant="ghost"
+                size="icon"
                 onClick={() => setIsManualOpen(true)}
                 className="w-6 h-6 rounded-full hover:bg-primary/10 text-primary/60 hover:text-primary transition-colors ml-2"
                 title="Manuale d'uso"
@@ -811,9 +417,9 @@ export default function App() {
                 <div className="flex flex-col items-end gap-2">
                   <Label className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground font-bold block">Master Tempo</Label>
                   <div className="flex items-center gap-4 min-w-[220px] justify-end">
-                    <Button 
-                      variant="outline" 
-                      size="sm" 
+                    <Button
+                      variant="outline"
+                      size="sm"
                       onClick={handleTap}
                       className="h-10 px-4 text-[11px] font-black bg-white/5 border-white/10 hover:bg-primary/20 hover:text-primary hover:border-primary/30 transition-all rounded-xl shadow-lg active:scale-95 shrink-0"
                     >
@@ -830,7 +436,7 @@ export default function App() {
                           className="w-full h-10 bg-background border-primary/20 text-white font-mono text-2xl text-center focus-visible:ring-primary/50"
                         />
                       ) : (
-                        <div 
+                        <div
                           className="text-4xl font-mono font-bold text-white leading-none cursor-pointer hover:text-primary transition-all group flex items-baseline gap-1"
                           onClick={() => {
                             setTempBpm(bpm?.toString() || '120');
@@ -846,19 +452,19 @@ export default function App() {
                 </div>
               <Separator orientation="vertical" className="h-12 bg-white/10" />
               <div className="w-full sm:w-56 space-y-3 relative z-50 pointer-events-auto">
-                <Slider 
-                  value={[bpm || 120]} 
+                <Slider
+                  value={[bpm || 120]}
                   onValueChange={(v) => {
                     const newBpm = Array.isArray(v) ? v[0] : v;
                     if (typeof newBpm === 'number' && !isNaN(newBpm)) {
                       setBpm(newBpm);
                       setTempBpm(newBpm.toString());
-                      currentBpmRef.current = newBpm;
+                      metronome.currentBpmRef.current = newBpm;
                       Tone.Transport.bpm.value = newBpm;
                     }
-                  }} 
-                  min={20} 
-                  max={320} 
+                  }}
+                  min={20}
+                  max={320}
                   step={1}
                   className="py-4 cursor-pointer"
                 />
@@ -873,16 +479,14 @@ export default function App() {
               {/* Volume Control */}
               <div className="flex items-center gap-3">
                 <Volume2 size={14} className="text-primary shrink-0" />
-                <Slider 
-                  value={[volume + 20]} 
+                <Slider
+                  value={[volume + 20]}
                   onValueChange={(v) => {
                     const newVol = Array.isArray(v) ? v[0] : v;
-                    if (typeof newVol === 'number') {
-                      setVolume(newVol - 20);
-                    }
-                  }} 
-                  min={0} 
-                  max={50} 
+                    if (typeof newVol === 'number') setVolume(newVol - 20);
+                  }}
+                  min={0}
+                  max={50}
                   step={1}
                   className="w-16 cursor-pointer"
                 />
@@ -891,13 +495,13 @@ export default function App() {
                 </span>
               </div>
             </div>
-            
+
             {/* BPM Growth Quick Settings */}
             <div className="flex items-center gap-4 bg-card/40 p-4 rounded-2xl border border-white/5 backdrop-blur-md">
               <div className="flex items-center gap-2">
-                <Switch 
-                  checked={bpmGrowth.enabled} 
-                  onCheckedChange={(v) => setBpmGrowth({ ...bpmGrowth, enabled: v })} 
+                <Switch
+                  checked={bpmGrowth.enabled}
+                  onCheckedChange={(v) => setBpmGrowth({ ...bpmGrowth, enabled: v })}
                 />
                 <Label className="text-[10px] uppercase tracking-widest font-bold text-muted-foreground">Growth</Label>
               </div>
@@ -926,7 +530,7 @@ export default function App() {
                   {/* Hardware Details */}
                   <div className="absolute inset-0 border-4 border-white/5 rounded-full shadow-inner" />
                   <div className="absolute inset-8 border border-white/10 rounded-full border-dashed opacity-50" />
-                  
+
                   {/* Beat Indicators */}
                   <div className="absolute inset-0 flex items-center justify-center">
                     {/* Outer Ring - Subdivisions */}
@@ -946,7 +550,7 @@ export default function App() {
                       />
                     ))}
 
-                    {/* Ghost Marker Ring - for between-beat events */}
+                    {/* Ghost Marker Ring */}
                     {ghostBeat !== null && (
                       <motion.div
                         key={`ghost-${ghostBeat}-${ghostType}`}
@@ -970,17 +574,16 @@ export default function App() {
                     {/* Main Beat Indicators */}
                     {Array.from({ length: getEffectiveBeats(sequence[currentStepIdx]?.timeSignature || '4/4') || 4 }).map((_, i, arr) => {
                       const numBeats = arr.length;
-                      // Calculate angle based on number of beats
                       const angle = i * (360 / numBeats);
                       const isActive = currentBeat === i + 1;
                       const isAccent = isActive && i === 0;
-                      
+
                       return (
                         <motion.div
                           key={i}
                           className={cn(
                             "absolute rounded-full",
-                            isActive 
+                            isActive
                               ? (isAccent
                                 ? "w-4 h-4 bg-red-500 shadow-[0_0_25px_rgba(239,68,68,0.8)] scale-125"
                                 : "w-4 h-4 bg-primary shadow-[0_0_25px_rgba(var(--primary),0.8)] scale-125")
@@ -991,7 +594,7 @@ export default function App() {
                           }}
                         >
                           {isActive && (
-                            <motion.div 
+                            <motion.div
                               layoutId="glow"
                               className={cn(
                                 "absolute inset-[-8px] blur-md rounded-full",
@@ -1004,7 +607,7 @@ export default function App() {
                     })}
                   </div>
 
-                  {/* Center Display - Hardware Style */}
+                  {/* Center Display */}
                   <div className="text-center glass-panel p-10 rounded-full w-48 h-48 flex flex-col items-center justify-center shadow-2xl border-white/10">
                     <AnimatePresence mode="wait">
                       <motion.div
@@ -1035,15 +638,15 @@ export default function App() {
                 </div>
 
                 <div className="mt-16">
-                  <Button 
-                    size="lg" 
+                  <Button
+                    size="lg"
                     className={cn(
                       "w-full h-24 rounded-3xl text-2xl font-black tracking-tighter transition-all duration-500 group relative overflow-hidden",
-                      isPlaying 
-                        ? "bg-white text-black hover:bg-zinc-200" 
+                      isPlaying
+                        ? "bg-white text-black hover:bg-zinc-200"
                         : "bg-primary text-black hover:bg-primary/90 shadow-[0_0_40px_rgba(var(--primary),0.3)]"
                     )}
-                    onClick={() => startMetronome(false)}
+                    onClick={() => isPlaying ? stopMetronome() : startMetronome(false)}
                   >
                     <div className="absolute inset-0 bg-gradient-to-t from-black/10 to-transparent opacity-50" />
                     <div className="relative z-10 flex items-center justify-center gap-4">
@@ -1115,35 +718,35 @@ export default function App() {
                       </CardDescription>
                     </div>
                     <div className="flex items-center gap-2">
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        onClick={clearFlow}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setIsClearModalOpen(true)}
                         className="bg-white/5 border-white/10 text-white hover:bg-destructive hover:text-white rounded-xl px-3 sm:px-4 py-5 font-bold tracking-wide text-[10px] sm:text-xs"
                       >
                         <Trash2 size={16} className="mr-1 sm:mr-2" /> CLEAR
                       </Button>
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        onClick={() => saveRoutine(false)}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => openSaveModal(false)}
                         className="bg-primary/10 border-primary/20 text-primary hover:bg-primary hover:text-black rounded-xl px-3 sm:px-4 py-5 font-bold tracking-wide text-[10px] sm:text-xs"
                       >
                         <Save size={16} className="mr-1 sm:mr-2" /> {activeRoutineId ? 'UPDATE' : 'SAVE'}
                       </Button>
                       {activeRoutineId && (
-                        <Button 
-                          variant="outline" 
-                          size="sm" 
-                          onClick={() => saveRoutine(true)}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => openSaveModal(true)}
                           className="bg-white/5 border-white/10 text-white hover:bg-white/10 rounded-xl px-3 sm:px-4 py-5 font-bold tracking-wide text-[10px] sm:text-xs"
                         >
                           SAVE AS NEW
                         </Button>
                       )}
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
+                      <Button
+                        variant="outline"
+                        size="sm"
                         onClick={addStep}
                         className="bg-white/5 border-white/10 text-white hover:bg-white/10 rounded-xl px-3 sm:px-4 py-5 font-bold tracking-wide text-[10px] sm:text-xs"
                       >
@@ -1164,8 +767,8 @@ export default function App() {
                               exit={{ opacity: 0, scale: 0.95 }}
                               className={cn(
                                 "group relative bg-black/40 border border-white/5 rounded-[2rem] p-6 transition-all duration-500",
-                                currentStepIdx === index && isPlaying 
-                                  ? "border-primary/40 bg-primary/5 ring-1 ring-primary/20 shadow-[0_0_30px_rgba(var(--primary),0.1)]" 
+                                currentStepIdx === index && isPlaying
+                                  ? "border-primary/40 bg-primary/5 ring-1 ring-primary/20 shadow-[0_0_30px_rgba(var(--primary),0.1)]"
                                   : "hover:border-white/10 hover:bg-white/[0.02]"
                               )}
                             >
@@ -1176,14 +779,14 @@ export default function App() {
                                       <div className="w-10 h-10 rounded-2xl bg-white/5 flex items-center justify-center text-xs font-mono font-black text-primary border border-white/10 shadow-inner">
                                         {String(index + 1).padStart(2, '0')}
                                       </div>
-                                      <Input 
+                                      <Input
                                         value={step.label ?? ""}
                                         onChange={(e) => updateStep(step.id, { label: e.target.value })}
                                         className="bg-transparent border-none text-xl font-black p-0 h-auto focus-visible:ring-0 text-white placeholder:text-white/10 tracking-tight w-full sm:w-48"
                                         placeholder="PHASE NAME"
                                       />
                                     </div>
-                                    
+
                                     {sequence.length === 1 && (
                                       <div className="flex items-center gap-2 bg-white/5 p-1 rounded-xl border border-white/10 w-fit">
                                         {(['measures', 'time', 'loop'] as DurationType[]).map((type) => (
@@ -1210,7 +813,7 @@ export default function App() {
                                         {step.durationType === 'time' ? 'Minutes' : 'Measures'}
                                       </Label>
                                       <div className="relative">
-                                        <Input 
+                                        <Input
                                           type="number"
                                           min={1}
                                           max={step.durationType === 'time' ? 20 : 999}
@@ -1222,8 +825,8 @@ export default function App() {
                                     </div>
                                     <div className="space-y-3">
                                       <Label className="text-[9px] uppercase tracking-[0.3em] text-muted-foreground font-black">Signature</Label>
-                                      <Select 
-                                        value={step.timeSignature ?? "4/4"} 
+                                      <Select
+                                        value={step.timeSignature ?? "4/4"}
                                         onValueChange={(v) => updateStep(step.id, { timeSignature: v })}
                                       >
                                         <SelectTrigger className="bg-white/5 border-white/5 text-white h-12 rounded-xl focus:ring-primary/30">
@@ -1241,8 +844,8 @@ export default function App() {
                                     </div>
                                     <div className="space-y-3">
                                       <Label className="text-[9px] uppercase tracking-[0.3em] text-muted-foreground font-black">Rhythm</Label>
-                                      <Select 
-                                        value={step.subdivision} 
+                                      <Select
+                                        value={step.subdivision}
                                         onValueChange={(v: Subdivision) => updateStep(step.id, { subdivision: v })}
                                       >
                                         <SelectTrigger className="bg-white/5 border-white/5 text-white h-12 rounded-xl focus:ring-primary/30">
@@ -1268,18 +871,18 @@ export default function App() {
 
                                 <div className="flex md:flex-col items-center justify-center gap-3">
                                   <div className="flex md:flex-col gap-2">
-                                    <Button 
-                                      variant="ghost" 
-                                      size="icon" 
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
                                       onClick={() => moveStep(index, 'up')}
                                       disabled={index === 0}
                                       className="h-10 w-10 text-muted-foreground hover:text-primary hover:bg-white/5 rounded-xl transition-all"
                                     >
                                       <ChevronUp size={20} />
                                     </Button>
-                                    <Button 
-                                      variant="ghost" 
-                                      size="icon" 
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
                                       onClick={() => moveStep(index, 'down')}
                                       disabled={index === sequence.length - 1}
                                       className="h-10 w-10 text-muted-foreground hover:text-primary hover:bg-white/5 rounded-xl transition-all"
@@ -1288,9 +891,9 @@ export default function App() {
                                     </Button>
                                   </div>
                                   <Separator orientation="vertical" className="h-10 md:w-10 md:h-[1px] bg-white/5" />
-                                  <Button 
-                                    variant="ghost" 
-                                    size="icon" 
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
                                     onClick={() => removeStep(step.id)}
                                     className="h-10 w-10 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-xl transition-all"
                                   >
@@ -1298,11 +901,11 @@ export default function App() {
                                   </Button>
                                 </div>
                               </div>
-                              
+
                               {/* Progress Bar for active step */}
                               {currentStepIdx === index && isPlaying && (
                                 <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-white/5 rounded-b-[2rem] overflow-hidden">
-                                  <motion.div 
+                                  <motion.div
                                     className="h-full bg-primary shadow-[0_0_15px_rgba(var(--primary),0.5)]"
                                     initial={{ width: 0 }}
                                     animate={{ width: `${(currentMeasure / step.measures) * 100}%` }}
@@ -1341,7 +944,7 @@ export default function App() {
                           </div>
                         ) : (
                           routines.map((routine) => (
-                            <div 
+                            <div
                               key={routine.id}
                               className={cn(
                                 "group bg-black/40 border border-white/5 rounded-3xl p-6 flex items-center justify-between hover:border-primary/30 transition-all duration-300",
@@ -1362,38 +965,35 @@ export default function App() {
                                 </div>
                               </div>
                               <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <Button 
-                                  variant="ghost" 
-                                  size="sm" 
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
                                   onClick={() => loadRoutine(routine)}
                                   className="bg-primary/10 text-primary hover:bg-primary hover:text-black rounded-xl font-bold"
                                 >
                                   LOAD
                                 </Button>
-                                <Button 
-                                  variant="ghost" 
-                                  size="icon" 
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
                                   onClick={() => openRenameModal(routine)}
                                   className="text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-xl"
                                   title="Rename"
                                 >
                                   <Edit3 size={18} />
                                 </Button>
-                                <Button 
-                                  variant="ghost" 
-                                  size="icon" 
-                                  onClick={() => {
-                                    const duplicated = { ...routine, id: Math.random().toString(36).substr(2, 9), name: `${routine.name} (Copy)` };
-                                    setRoutines([...routines, duplicated]);
-                                  }}
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => duplicateRoutine(routine)}
                                   className="text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-xl"
                                   title="Duplicate"
                                 >
                                   <Copy size={18} />
                                 </Button>
-                                <Button 
-                                  variant="ghost" 
-                                  size="icon" 
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
                                   onClick={() => deleteRoutine(routine.id)}
                                   className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-xl"
                                 >
@@ -1431,8 +1031,8 @@ export default function App() {
                         </div>
                         <div className="flex items-center gap-4">
                           {bpmGrowth.enabled && (
-                            <Select 
-                              value={bpmGrowth.unit ?? "measures"} 
+                            <Select
+                              value={bpmGrowth.unit ?? "measures"}
                               onValueChange={(v: 'measures' | 'time') => setBpmGrowth({ ...bpmGrowth, unit: v })}
                             >
                               <SelectTrigger className="bg-white/5 border-white/10 text-primary font-bold text-[10px] h-9 px-3 rounded-xl focus:ring-0 w-28">
@@ -1444,21 +1044,21 @@ export default function App() {
                               </SelectContent>
                             </Select>
                           )}
-                          <Switch 
-                            checked={bpmGrowth.enabled} 
-                            onCheckedChange={(v) => setBpmGrowth({ ...bpmGrowth, enabled: v })} 
+                          <Switch
+                            checked={bpmGrowth.enabled}
+                            onCheckedChange={(v) => setBpmGrowth({ ...bpmGrowth, enabled: v })}
                           />
                         </div>
                       </div>
-                      
+
                       {bpmGrowth.enabled && (
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6 animate-in fade-in slide-in-from-top-4">
                           <div className="space-y-3">
                             <Label className="text-[10px] uppercase tracking-widest font-black text-muted-foreground">Increase By</Label>
                             <div className="flex items-center gap-3 bg-white/5 p-3 rounded-xl border border-white/10">
-                              <Input 
-                                type="number" 
-                                value={bpmGrowth.amount ?? 1} 
+                              <Input
+                                type="number"
+                                value={bpmGrowth.amount ?? 1}
                                 onChange={(e) => setBpmGrowth({ ...bpmGrowth, amount: parseInt(e.target.value) || 1 })}
                                 className="bg-transparent border-none text-center font-mono text-white p-0 h-auto focus-visible:ring-0 flex-1"
                               />
@@ -1468,9 +1068,9 @@ export default function App() {
                           <div className="space-y-3">
                             <Label className="text-[10px] uppercase tracking-widest font-black text-muted-foreground">Every</Label>
                             <div className="flex items-center gap-3 bg-white/5 p-3 rounded-xl border border-white/10">
-                              <Input 
-                                type="number" 
-                                value={bpmGrowth.every ?? 1} 
+                              <Input
+                                type="number"
+                                value={bpmGrowth.every ?? 1}
                                 onChange={(e) => setBpmGrowth({ ...bpmGrowth, every: parseInt(e.target.value) || 1 })}
                                 className="bg-transparent border-none text-center font-mono text-white p-0 h-auto focus-visible:ring-0 flex-1"
                               />
@@ -1551,14 +1151,14 @@ export default function App() {
                                   <p className="text-[10px] text-muted-foreground">Restart automatically after {flowDurationValue} {flowDurationType}.</p>
                                 </div>
                               </div>
-                              <Switch 
-                                checked={loopFlow} 
-                                onCheckedChange={setLoopFlow} 
+                              <Switch
+                                checked={loopFlow}
+                                onCheckedChange={setLoopFlow}
                               />
                             </div>
                           </div>
                         )}
-                        
+
                         {flowDurationType === 'loop' && (
                           <div className="p-4 bg-primary/10 rounded-2xl border border-primary/30 flex items-center gap-4 animate-in fade-in zoom-in-95">
                             <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center">
@@ -1595,18 +1195,18 @@ export default function App() {
           </div>
         </footer>
 
-        {/* Save Routine Modal */}
+        {/* Modals */}
         <AnimatePresence>
           {isSaveModalOpen && (
             <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6">
-              <motion.div 
+              <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 onClick={() => setIsSaveModalOpen(false)}
                 className="absolute inset-0 bg-black/80 backdrop-blur-sm"
               />
-              <motion.div 
+              <motion.div
                 initial={{ opacity: 0, scale: 0.95, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -1623,9 +1223,9 @@ export default function App() {
                         {routineToRenameId ? 'Change the name of this routine.' : (isSavingAsNew ? 'Create a new practice routine.' : 'Update the current routine settings.')}
                       </p>
                     </div>
-                    <Button 
-                      variant="ghost" 
-                      size="icon" 
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       onClick={() => setIsSaveModalOpen(false)}
                       className="rounded-full hover:bg-white/5 text-muted-foreground"
                     >
@@ -1636,7 +1236,7 @@ export default function App() {
                   <div className="space-y-4">
                     <div className="space-y-2">
                       <Label className="text-xs font-bold text-muted-foreground uppercase tracking-widest ml-1">ROUTINE NAME</Label>
-                      <Input 
+                      <Input
                         value={routineNameInput}
                         onChange={(e) => setRoutineNameInput(e.target.value)}
                         placeholder="Enter routine name..."
@@ -1651,14 +1251,14 @@ export default function App() {
                   </div>
 
                   <div className="flex gap-3 pt-2">
-                    <Button 
-                      variant="outline" 
+                    <Button
+                      variant="outline"
                       onClick={() => setIsSaveModalOpen(false)}
                       className="flex-1 h-14 rounded-2xl border-white/10 bg-white/5 text-white font-bold hover:bg-white/10"
                     >
                       CANCEL
                     </Button>
-                    <Button 
+                    <Button
                       onClick={confirmSave}
                       className="flex-1 h-14 rounded-2xl bg-primary text-black font-black hover:bg-primary/90 shadow-[0_0_20px_rgba(var(--primary),0.3)]"
                     >
@@ -1670,17 +1270,16 @@ export default function App() {
             </div>
           )}
 
-          {/* Clear Flow Confirmation Modal */}
           {isClearModalOpen && (
             <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6">
-              <motion.div 
+              <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 onClick={() => setIsClearModalOpen(false)}
                 className="absolute inset-0 bg-black/80 backdrop-blur-sm"
               />
-              <motion.div 
+              <motion.div
                 initial={{ opacity: 0, scale: 0.95, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -1697,9 +1296,9 @@ export default function App() {
                         This will reset your current sequence. This action cannot be undone.
                       </p>
                     </div>
-                    <Button 
-                      variant="ghost" 
-                      size="icon" 
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       onClick={() => setIsClearModalOpen(false)}
                       className="rounded-full hover:bg-white/5 text-muted-foreground"
                     >
@@ -1708,14 +1307,14 @@ export default function App() {
                   </div>
 
                   <div className="flex gap-3 pt-2">
-                    <Button 
-                      variant="outline" 
+                    <Button
+                      variant="outline"
                       onClick={() => setIsClearModalOpen(false)}
                       className="flex-1 h-14 rounded-2xl border-white/10 bg-white/5 text-white font-bold hover:bg-white/10"
                     >
                       CANCEL
                     </Button>
-                    <Button 
+                    <Button
                       onClick={confirmClearFlow}
                       className="flex-1 h-14 rounded-2xl bg-destructive text-white font-black hover:bg-destructive/90 shadow-[0_0_20px_rgba(var(--destructive),0.3)]"
                     >
@@ -1727,17 +1326,16 @@ export default function App() {
             </div>
           )}
 
-          {/* User Manual Modal */}
           {isManualOpen && (
             <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6">
-              <motion.div 
+              <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 onClick={() => setIsManualOpen(false)}
                 className="absolute inset-0 bg-black/90 backdrop-blur-md"
               />
-              <motion.div 
+              <motion.div
                 initial={{ opacity: 0, scale: 0.95, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -1753,9 +1351,9 @@ export default function App() {
                       Quick guide to mastering RhythmFlow.
                     </p>
                   </div>
-                  <Button 
-                    variant="ghost" 
-                    size="icon" 
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     onClick={() => setIsManualOpen(false)}
                     className="rounded-full hover:bg-white/5 text-muted-foreground"
                   >
@@ -1815,7 +1413,7 @@ export default function App() {
                         <Activity size={14} /> 3a. Compound Time Signatures
                       </h4>
                       <p className="text-muted-foreground text-sm leading-relaxed">
-                        RhythmFlow supports both <strong>simple</strong> and <strong>compound</strong> time signatures. Understanding the difference helps you practice more effectively.
+                        RhythmFlow supports both <strong>simple</strong> and <strong>compound</strong> time signatures.
                       </p>
                       <div className="bg-white/5 p-4 rounded-2xl border border-white/10 space-y-3">
                         <div className="text-sm">
@@ -1824,7 +1422,7 @@ export default function App() {
                         </div>
                         <div className="text-sm">
                           <span className="text-white font-bold">Compound Time (e.g., 6/8, 7/8, 9/8):</span>
-                          <span className="text-muted-foreground"> Each main beat is divided into three equal parts (triplets). The visual display shows the <strong>effective beats</strong>:</span>
+                          <span className="text-muted-foreground"> Each main beat is divided into three equal parts. The visual display shows the <strong>effective beats</strong>:</span>
                         </div>
                         <ul className="space-y-2 text-sm text-muted-foreground ml-4">
                           <li className="flex gap-2">
@@ -1841,9 +1439,6 @@ export default function App() {
                           </li>
                         </ul>
                       </div>
-                      <p className="text-muted-foreground text-sm leading-relaxed">
-                        <span className="text-white font-bold">The Rhythm (Subdivision) setting</span> controls how the metronome sounds relative to these beats. You can create polyrhythms—for example, in 7/8 with <strong>Quarter</strong> subdivision, the display counts 1-2-3-4-5-6-7 while sound plays on beats 1, 3, 5, and 7. This is useful for practicing complex rhythms while keeping a steady pulse.
-                      </p>
                     </section>
 
                     <section className="space-y-4">
@@ -1851,7 +1446,7 @@ export default function App() {
                         <TrendingUp size={14} /> 4. BPM Growth (Auto-Increase)
                       </h4>
                       <p className="text-muted-foreground text-sm leading-relaxed">
-                        Activate "Growth" to automatically increase speed during the session. You can set how much to increase the BPM and every how many measures (or minutes) to do so. Ideal for practicing technical passages starting slowly.
+                        Activate "Growth" to automatically increase speed during the session. You can set how much to increase the BPM and every how many measures (or minutes) to do so.
                       </p>
                     </section>
 
@@ -1862,15 +1457,15 @@ export default function App() {
                       <ul className="space-y-3 text-sm text-muted-foreground">
                         <li className="flex gap-3">
                           <span className="text-white font-bold">•</span>
-                          <span>**Save:** Click "SAVE" to store your current flow. A window will open to name the routine.</span>
+                          <span>**Save:** Click "SAVE" to store your current flow.</span>
                         </li>
                         <li className="flex gap-3">
                           <span className="text-white font-bold">•</span>
-                          <span>**Recall:** In the "ROUTINES" tab, you'll find all your saved sessions. Click "LOAD" to load one.</span>
+                          <span>**Recall:** In the "ROUTINES" tab, click "LOAD" to restore a session.</span>
                         </li>
                         <li className="flex gap-3">
                           <span className="text-white font-bold">•</span>
-                          <span>**Persistence:** Routines are saved in your browser and will be available even if you close the page.</span>
+                          <span>**Persistence:** Routines are saved in your browser's local storage.</span>
                         </li>
                       </ul>
                     </section>
@@ -1890,7 +1485,7 @@ export default function App() {
                 </div>
 
                 <div className="p-8 border-t border-white/5 bg-white/[0.02]">
-                  <Button 
+                  <Button
                     onClick={() => setIsManualOpen(false)}
                     className="w-full h-14 rounded-2xl bg-primary text-black font-black hover:bg-primary/90"
                   >
