@@ -384,8 +384,8 @@ export default function App() {
         <div className="absolute inset-0 knurled-bg opacity-[0.03]" />
       </div>
 
-      <div className="relative z-10 max-w-6xl mx-auto px-6 py-12">
-        <header className="flex flex-col md:flex-row md:items-end justify-between gap-8 mb-16">
+      <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-12">
+        <header className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-8 sm:mb-16">
           <div className="space-y-2">
             <div className="flex items-center gap-3">
               <div className="flex gap-1">
@@ -404,7 +404,7 @@ export default function App() {
                 <HelpCircle size={14} />
               </Button>
             </div>
-            <h1 className="text-6xl font-black tracking-tight font-heading text-white">
+            <h1 className="text-4xl sm:text-6xl font-black tracking-tight font-heading text-white">
               RHYTHM<span className="text-primary">FLOW</span>
             </h1>
             <p className="text-muted-foreground text-sm font-medium max-w-md border-l-2 border-primary/20 pl-4 py-1">
@@ -413,45 +413,51 @@ export default function App() {
           </div>
 
           <div className="flex flex-col gap-4">
-            <div className="flex items-center gap-6 bg-card/80 p-6 rounded-3xl border border-white/5 backdrop-blur-xl shadow-2xl">
-                <div className="flex flex-col items-end gap-2">
-                  <Label className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground font-bold block">Master Tempo</Label>
-                  <div className="flex items-center gap-4 min-w-[220px] justify-end">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleTap}
-                      className="h-10 px-4 text-[11px] font-black bg-white/5 border-white/10 hover:bg-primary/20 hover:text-primary hover:border-primary/30 transition-all rounded-xl shadow-lg active:scale-95 shrink-0"
-                    >
-                      TAP
-                    </Button>
-                    <div className="w-28 flex justify-end">
-                      {isEditingBpm ? (
-                        <Input
-                          autoFocus
-                          value={tempBpm ?? ""}
-                          onChange={(e) => setTempBpm(e.target.value)}
-                          onBlur={handleBpmSubmit}
-                          onKeyDown={(e) => e.key === 'Enter' && handleBpmSubmit()}
-                          className="w-full h-10 bg-background border-primary/20 text-white font-mono text-2xl text-center focus-visible:ring-primary/50"
-                        />
-                      ) : (
-                        <div
-                          className="text-4xl font-mono font-bold text-white leading-none cursor-pointer hover:text-primary transition-all group flex items-baseline gap-1"
-                          onClick={() => {
-                            setTempBpm(bpm?.toString() || '120');
-                            setIsEditingBpm(true);
-                          }}
-                        >
-                          <span className="group-hover:scale-110 transition-transform inline-block">{bpm || 120}</span>
-                          <span className="text-xs font-bold text-muted-foreground tracking-widest">BPM</span>
-                        </div>
-                      )}
-                    </div>
+            <div className="flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-6 bg-card/80 p-4 sm:p-6 rounded-3xl border border-white/5 backdrop-blur-xl shadow-2xl">
+              {/* TAP + BPM */}
+              <div className="flex items-center justify-between sm:justify-end gap-4">
+                <Label className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground font-bold sm:hidden">Master Tempo</Label>
+                <div className="flex items-center gap-4">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleTap}
+                    className="h-10 px-4 text-[11px] font-black bg-white/5 border-white/10 hover:bg-primary/20 hover:text-primary hover:border-primary/30 transition-all rounded-xl shadow-lg active:scale-95 shrink-0"
+                  >
+                    TAP
+                  </Button>
+                  <div className="w-28 flex justify-end">
+                    {isEditingBpm ? (
+                      <Input
+                        autoFocus
+                        value={tempBpm ?? ""}
+                        onChange={(e) => setTempBpm(e.target.value)}
+                        onBlur={handleBpmSubmit}
+                        onKeyDown={(e) => e.key === 'Enter' && handleBpmSubmit()}
+                        className="w-full h-10 bg-background border-primary/20 text-white font-mono text-2xl text-center focus-visible:ring-primary/50"
+                      />
+                    ) : (
+                      <div
+                        className="text-4xl font-mono font-bold text-white leading-none cursor-pointer hover:text-primary transition-all group flex items-baseline gap-1"
+                        onClick={() => {
+                          setTempBpm(bpm?.toString() || '120');
+                          setIsEditingBpm(true);
+                        }}
+                      >
+                        <span className="group-hover:scale-110 transition-transform inline-block">{bpm || 120}</span>
+                        <span className="text-xs font-bold text-muted-foreground tracking-widest">BPM</span>
+                      </div>
+                    )}
                   </div>
                 </div>
-              <Separator orientation="vertical" className="h-12 bg-white/10" />
-              <div className="w-full sm:w-56 space-y-3 relative z-50 pointer-events-auto">
+              </div>
+
+              <Separator orientation="horizontal" className="sm:hidden h-px bg-white/10" />
+              <Separator orientation="vertical" className="hidden sm:block h-12 bg-white/10" />
+
+              {/* BPM Slider */}
+              <div className="flex-1 space-y-2 relative z-50 pointer-events-auto">
+                <Label className="hidden sm:block text-[10px] uppercase tracking-[0.2em] text-muted-foreground font-bold">Master Tempo</Label>
                 <Slider
                   value={[bpm || 120]}
                   onValueChange={(v) => {
@@ -476,6 +482,9 @@ export default function App() {
                 </div>
               </div>
 
+              <Separator orientation="horizontal" className="sm:hidden h-px bg-white/10" />
+              <Separator orientation="vertical" className="hidden sm:block h-12 bg-white/10" />
+
               {/* Volume Control */}
               <div className="flex items-center gap-3">
                 <Volume2 size={14} className="text-primary shrink-0" />
@@ -488,16 +497,16 @@ export default function App() {
                   min={0}
                   max={50}
                   step={1}
-                  className="w-16 cursor-pointer"
+                  className="w-full sm:w-16 cursor-pointer"
                 />
-                <span className="text-[10px] font-mono text-muted-foreground w-10 text-right">
+                <span className="text-[10px] font-mono text-muted-foreground w-10 text-right shrink-0">
                   {volume > 0 ? '+' : ''}{volume}dB
                 </span>
               </div>
             </div>
 
             {/* BPM Growth Quick Settings */}
-            <div className="flex items-center gap-4 bg-card/40 p-4 rounded-2xl border border-white/5 backdrop-blur-md">
+            <div className="flex flex-wrap items-center gap-3 bg-card/40 p-4 rounded-2xl border border-white/5 backdrop-blur-md">
               <div className="flex items-center gap-2">
                 <Switch
                   checked={bpmGrowth.enabled}
@@ -506,14 +515,12 @@ export default function App() {
                 <Label className="text-[10px] uppercase tracking-widest font-bold text-muted-foreground">Growth</Label>
               </div>
               {bpmGrowth.enabled && (
-                <div className="flex items-center gap-3 animate-in fade-in slide-in-from-left-2">
-                  <TrendingUp size={14} className="text-primary" />
-                  <div className="flex items-center gap-1">
-                    <span className="text-[10px] font-mono text-white">+{bpmGrowth.amount}</span>
-                    <span className="text-[10px] text-muted-foreground">every</span>
-                    <span className="text-[10px] font-mono text-white">{bpmGrowth.every}</span>
-                    <span className="text-[10px] text-muted-foreground">{bpmGrowth.unit}</span>
-                  </div>
+                <div className="flex items-center gap-2 animate-in fade-in slide-in-from-left-2 flex-wrap">
+                  <TrendingUp size={14} className="text-primary shrink-0" />
+                  <span className="text-[10px] font-mono text-white">+{bpmGrowth.amount}</span>
+                  <span className="text-[10px] text-muted-foreground">every</span>
+                  <span className="text-[10px] font-mono text-white">{bpmGrowth.every}</span>
+                  <span className="text-[10px] text-muted-foreground">{bpmGrowth.unit}</span>
                 </div>
               )}
             </div>
@@ -525,7 +532,7 @@ export default function App() {
           <div className="lg:col-span-5 space-y-10">
             <Card className="bg-card/40 border-white/5 backdrop-blur-2xl overflow-hidden shadow-2xl relative group">
               <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent opacity-50" />
-              <CardContent className="p-10 relative z-10">
+              <CardContent className="p-4 sm:p-10 relative z-10">
                 <div className="relative aspect-square flex items-center justify-center">
                   {/* Hardware Details */}
                   <div className="absolute inset-0 border-4 border-white/5 rounded-full shadow-inner" />
@@ -608,7 +615,7 @@ export default function App() {
                   </div>
 
                   {/* Center Display */}
-                  <div className="text-center glass-panel p-10 rounded-full w-48 h-48 flex flex-col items-center justify-center shadow-2xl border-white/10">
+                  <div className="text-center glass-panel p-6 sm:p-10 rounded-full w-36 h-36 sm:w-48 sm:h-48 flex flex-col items-center justify-center shadow-2xl border-white/10">
                     <AnimatePresence mode="wait">
                       <motion.div
                         key={currentStepIdx}
@@ -621,7 +628,7 @@ export default function App() {
                       </motion.div>
                     </AnimatePresence>
                     <div className={cn(
-                      "text-9xl font-mono font-black leading-none tracking-tighter drop-shadow-[0_0_20px_rgba(255,255,255,0.2)] transition-colors duration-100",
+                      "text-6xl sm:text-9xl font-mono font-black leading-none tracking-tighter drop-shadow-[0_0_20px_rgba(255,255,255,0.2)] transition-colors duration-100",
                       isPlaying && currentBeat === 1 ? "text-red-500" : "text-white"
                     )}>
                       {currentBeat || '0'}
@@ -637,11 +644,11 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="mt-16">
+                <div className="mt-8 sm:mt-16">
                   <Button
                     size="lg"
                     className={cn(
-                      "w-full h-24 rounded-3xl text-2xl font-black tracking-tighter transition-all duration-500 group relative overflow-hidden",
+                      "w-full h-16 sm:h-24 rounded-3xl text-xl sm:text-2xl font-black tracking-tighter transition-all duration-500 group relative overflow-hidden",
                       isPlaying
                         ? "bg-white text-black hover:bg-zinc-200"
                         : "bg-primary text-black hover:bg-primary/90 shadow-[0_0_40px_rgba(var(--primary),0.3)]"
@@ -717,29 +724,29 @@ export default function App() {
                         Configure your session timeline and rhythmic variations.
                       </CardDescription>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={() => setIsClearModalOpen(true)}
-                        className="bg-white/5 border-white/10 text-white hover:bg-destructive hover:text-white rounded-xl px-3 sm:px-4 py-5 font-bold tracking-wide text-[10px] sm:text-xs"
+                        className="bg-white/5 border-white/10 text-white hover:bg-destructive hover:text-white rounded-xl px-3 py-2 font-bold tracking-wide text-[10px]"
                       >
-                        <Trash2 size={16} className="mr-1 sm:mr-2" /> CLEAR
+                        <Trash2 size={14} className="mr-1" /> CLEAR
                       </Button>
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={() => openSaveModal(false)}
-                        className="bg-primary/10 border-primary/20 text-primary hover:bg-primary hover:text-black rounded-xl px-3 sm:px-4 py-5 font-bold tracking-wide text-[10px] sm:text-xs"
+                        className="bg-primary/10 border-primary/20 text-primary hover:bg-primary hover:text-black rounded-xl px-3 py-2 font-bold tracking-wide text-[10px]"
                       >
-                        <Save size={16} className="mr-1 sm:mr-2" /> {activeRoutineId ? 'UPDATE' : 'SAVE'}
+                        <Save size={14} className="mr-1" /> {activeRoutineId ? 'UPDATE' : 'SAVE'}
                       </Button>
                       {activeRoutineId && (
                         <Button
                           variant="outline"
                           size="sm"
                           onClick={() => openSaveModal(true)}
-                          className="bg-white/5 border-white/10 text-white hover:bg-white/10 rounded-xl px-3 sm:px-4 py-5 font-bold tracking-wide text-[10px] sm:text-xs"
+                          className="bg-white/5 border-white/10 text-white hover:bg-white/10 rounded-xl px-3 py-2 font-bold tracking-wide text-[10px]"
                         >
                           SAVE AS NEW
                         </Button>
@@ -748,15 +755,15 @@ export default function App() {
                         variant="outline"
                         size="sm"
                         onClick={addStep}
-                        className="bg-white/5 border-white/10 text-white hover:bg-white/10 rounded-xl px-3 sm:px-4 py-5 font-bold tracking-wide text-[10px] sm:text-xs"
+                        className="bg-white/5 border-white/10 text-white hover:bg-white/10 rounded-xl px-3 py-2 font-bold tracking-wide text-[10px]"
                       >
-                        <Plus size={16} className="mr-1 sm:mr-2" /> PHASE
+                        <Plus size={14} className="mr-1" /> PHASE
                       </Button>
                     </div>
                   </CardHeader>
                   <CardContent className="flex-1 p-0">
-                    <ScrollArea className="h-[640px] px-8">
-                      <div className="py-8 space-y-6">
+                    <ScrollArea className="h-[420px] sm:h-[640px] px-4 sm:px-8">
+                      <div className="py-6 sm:py-8 space-y-6">
                         <AnimatePresence initial={false}>
                           {sequence.map((step, index) => (
                             <motion.div
@@ -933,7 +940,7 @@ export default function App() {
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="flex-1 p-0">
-                    <ScrollArea className="h-[640px] px-8">
+                    <ScrollArea className="h-[420px] sm:h-[640px] px-4 sm:px-8">
                       <div className="py-8 grid grid-cols-1 gap-4">
                         {routines.length === 0 ? (
                           <div className="text-center py-20 space-y-4">
